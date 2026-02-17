@@ -111,3 +111,10 @@ Once the app is running, ask questions in the chat interface. The agent retrieve
 - What is the LAB71 series and how is it different?
 - Compare the Carbon 3 SmartSense with the Carbon 4
 - Which model would you recommend for a beginner?
+
+## Screenshots
+
+Below are example screenshots of the application in use:
+
+![Screenshot-01](./res/Screenshots/Screenshot%202026-02-16%20231625.png "BI Agent Screenshot 1")
+![Screenshot-02](./res/Screenshots/Screenshot%202026-02-16%20231636.png "BI Agent Screenshot 2")
