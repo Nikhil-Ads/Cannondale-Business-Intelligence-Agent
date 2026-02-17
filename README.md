@@ -1,26 +1,46 @@
 # Business Intelligence Agent
 
-The Business Intelligence Agent performs data analysis and presents business insights through text or visualizations, answering questions for business requirements and analysis. It connects to SQL databases, interprets natural language queries, executes SQL, and returns results as tables or interactive Plotly charts—serving as an AI copilot for BI, customer analytics, and data visualization.
+An AI-powered business intelligence agent that answers questions about Cannondale Synapse bicycles. It scrapes product data from the Cannondale website, builds a vector knowledge base, and provides text-based insights through a conversational Streamlit interface using Retrieval-Augmented Generation (RAG).
 
 ## Tech Stack
 
 | Category | Technologies |
 |----------|--------------|
-| **AI / LLM** | LangChain, LangGraph, OpenAI (GPT-4o, GPT-4.1, etc.) |
-| **BI Agent** | ai-data-science-team |
+| **AI / LLM** | LangChain, LangGraph, OpenAI (GPT-4o-mini) |
+| **Vector Store** | ChromaDB |
+| **Embeddings** | OpenAI text-embedding-ada-002 |
+| **Web Scraping** | LangChain WebBaseLoader |
 | **Web UI** | Streamlit |
-| **Visualization** | Plotly |
-| **Data** | Pandas, SQLAlchemy |
-| **Database** | SQLite (configurable) |
+| **Data** | Pandas |
 | **Config** | PyYAML |
 
-The agent is implemented in `src/agents/bi_agent_final.py`, which uses the `make_business_intelligence_agent` from the ai-data-science-team package to orchestrate SQL generation, execution, and visualization via LangChain/LangGraph and OpenAI.
+## Project Structure
+
+```
+Business Intelligence Agent/
+├── scripts/
+│   └── create_cannondale_db.py       # Web scraping script to build vector store
+├── src/
+│   ├── agents/
+│   │   └── bi_agent_mvp.py           # LangGraph RAG agent
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   └── db_utils.py               # Chroma vector store connection utilities
+│   └── frontend/
+│       └── app.py                    # Streamlit chat application
+├── res/
+│   ├── cannondale_synapse_products.csv   # Product URLs for scraping
+│   └── data/
+│       └── cannondale_vectorstore/       # Generated vector store (created by script)
+├── credentials.yml                       # OpenAI API key (not committed)
+├── env.yaml                              # Conda environment spec
+└── requirements.txt                      # pip dependencies
+```
 
 ## Prerequisites
 
 - **Python** 3.10+
 - **OpenAI API key** — stored in `credentials.yml` under the `openai` key
-- **Databases** — SQLite files (e.g. `database/leads_scored.db`, `challenges/challenge_03_connect_bikes_database/bikeshop_database.sqlite`) or other SQLAlchemy-supported databases
 
 ## Setup
 
@@ -37,12 +57,6 @@ The agent is implemented in `src/agents/bi_agent_final.py`, which uses the `make
 
    ```yaml
    openai: "your-openai-api-key-here"
-   ```
-
-3. Run the Streamlit app from the project root:
-
-   ```bash
-   streamlit run src/agents/bi_agent_final.py
    ```
 
 ### Option 2: Python venv
@@ -67,25 +81,33 @@ The agent is implemented in `src/agents/bi_agent_final.py`, which uses the `make
    openai: "your-openai-api-key-here"
    ```
 
-4. Run the Streamlit app from the project root:
+## Running the Application
 
-   ```bash
-   streamlit run src/agents/bi_agent_final.py
-   ```
+### Step 1: Build the Vector Store (one-time setup)
+
+Run the web scraping script from the project root to scrape Cannondale product pages and create the Chroma vector store:
+
+```bash
+python scripts/create_cannondale_db.py
+```
+
+This reads `res/cannondale_synapse_products.csv`, scrapes each product page, cleans the text, enriches it with metadata, and persists the vector store to `res/data/cannondale_vectorstore/`.
+
+### Step 2: Launch the Streamlit App
+
+```bash
+streamlit run src/frontend/app.py
+```
 
 ## Usage
 
-After starting the app, you can:
-
-1. Choose an **OpenAI model** (e.g. gpt-4.1-nano, gpt-4o) from the sidebar.
-2. Choose a **Database** connection (e.g. Leads, Bikes).
-3. Ask questions in natural language.
+Once the app is running, ask questions in the chat interface. The agent retrieves relevant product information from the vector store and returns text-based insights.
 
 **Example questions:**
-- What tables are in the database?
-- What does the transactions table contain?
-- What is the average p1 lead score of leads by member rating?
-- What are the top 5 product sales revenue by product name? Make a donut chart.
-- What are the total sales by month-year? Make a chart of sales over time.
-
-The agent responds with tables, interactive charts, or explanatory text depending on the question.
+- What are the main differences between Synapse models?
+- Which Synapse bike is best for long-distance riding?
+- Tell me about the SmartSense technology
+- What's the difference between Carbon 1 and Carbon 2?
+- What is the LAB71 series and how is it different?
+- Compare the Carbon 3 SmartSense with the Carbon 4
+- Which model would you recommend for a beginner?
