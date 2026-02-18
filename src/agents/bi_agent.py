@@ -4,7 +4,7 @@ MVP Business Intelligence Agent using LangGraph.
 Implements a simple RAG pipeline:
     retrieve  -->  generate_answer  -->  END
 
-Fixed model: gpt-4o-mini  (no user-facing option to change).
+Model is configurable via make_mvp_rag_agent(model=...).
 Text-only insights (no charts, no tables).
 """
 
@@ -28,7 +28,9 @@ from src.utils.db_utils import get_chroma_vectorstore, get_retriever
 # Constants
 # ---------------------------------------------------------------------------
 
-FIXED_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-4o-mini"
+
+AVAILABLE_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"]
 
 DEFAULT_PERSIST_DIR = str(
     pathlib.Path(__file__).resolve().parents[2]
@@ -84,7 +86,7 @@ class GraphState(TypedDict):
 # Agent factory
 # ---------------------------------------------------------------------------
 
-def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR):
+def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFAULT_MODEL):
     """
     Build and compile the MVP RAG agent graph.
 
@@ -92,6 +94,9 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR):
     ----------
     persist_dir : str
         Path to the persisted Chroma vector store directory.
+    model : str
+        OpenAI chat model name to use for answer generation.
+        Defaults to DEFAULT_MODEL.
 
     Returns
     -------
@@ -103,8 +108,8 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR):
     vectorstore = get_chroma_vectorstore(persist_dir=persist_dir)
     retriever = get_retriever(vectorstore, k=5)
 
-    # LLM (fixed)
-    llm = ChatOpenAI(model=FIXED_MODEL, temperature=0.7)
+    # LLM (configurable)
+    llm = ChatOpenAI(model=model, temperature=0.7)
 
     # Chain for answer generation
     answer_chain = QA_PROMPT | llm

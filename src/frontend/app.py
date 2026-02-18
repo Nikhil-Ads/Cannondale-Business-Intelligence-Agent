@@ -29,14 +29,40 @@ VECTORSTORE_DIR = str(BASE_DIR / "res" / "data" / "cannondale_vectorstore")
 os.environ["OPENAI_API_KEY"] = yaml.safe_load(open(CREDENTIALS_PATH))["openai"]
 
 # Import after env var is set so OpenAI clients pick it up
-from src.agents.bi_agent import make_mvp_rag_agent  # noqa: E402
+from src.agents.bi_agent import make_mvp_rag_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
 
 st.set_page_config(page_title="BI Agent MVP - Cannondale Expert")
-st.title("BI Agent MVP - Cannondale Expert")
+
+# ---------------------------------------------------------------------------
+# Sidebar — model selection (persisted in session_state)
+# ---------------------------------------------------------------------------
+
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = DEFAULT_MODEL
+
+selected_model = st.sidebar.selectbox(
+    "Choose OpenAI model",
+    AVAILABLE_MODELS,
+    index=AVAILABLE_MODELS.index(st.session_state.selected_model),
+)
+
+# Persist selection across reruns; rebuild agent if model changed
+if selected_model != st.session_state.selected_model:
+    st.session_state.selected_model = selected_model
+    # Clear cached agent so it's recreated with the new model
+    st.cache_resource.clear()
+
+st.sidebar.markdown(f"**Active model:** `{st.session_state.selected_model}`")
+
+# ---------------------------------------------------------------------------
+# Header
+# ---------------------------------------------------------------------------
+
+st.title(f"BI Agent MVP - Cannondale Expert  |  model: `{st.session_state.selected_model}`")
 
 st.markdown(
     "I'm a business intelligence agent that answers questions about "
@@ -79,10 +105,10 @@ if len(msgs.messages) == 0:
 # ---------------------------------------------------------------------------
 
 @st.cache_resource
-def _get_agent():
-    return make_mvp_rag_agent(persist_dir=VECTORSTORE_DIR)
+def _get_agent(model: str):
+    return make_mvp_rag_agent(persist_dir=VECTORSTORE_DIR, model=model)
 
-agent = _get_agent()
+agent = _get_agent(st.session_state.selected_model)
 
 # ---------------------------------------------------------------------------
 # Render chat history
