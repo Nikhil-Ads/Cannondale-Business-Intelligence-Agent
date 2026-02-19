@@ -80,6 +80,7 @@ class GraphState(TypedDict):
     user_question: str
     retrieved_docs: list
     answer: str
+    sources: list  # deduplicated source URLs / references from retrieved docs
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +124,17 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
         print("--- RETRIEVE ---")
         question = state["user_question"]
         docs = retriever.invoke(question)
-        return {"retrieved_docs": docs}
+
+        # Extract and deduplicate source URLs from document metadata
+        seen = set()
+        sources = []
+        for doc in docs:
+            src = doc.metadata.get("source") or doc.metadata.get("url") or doc.metadata.get("Source")
+            if src and src not in seen:
+                seen.add(src)
+                sources.append(src)
+
+        return {"retrieved_docs": docs, "sources": sources}
 
     def generate_answer(state: GraphState) -> dict:
         """Generate a text answer from the retrieved context."""
