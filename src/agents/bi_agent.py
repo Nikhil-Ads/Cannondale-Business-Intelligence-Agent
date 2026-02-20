@@ -80,7 +80,7 @@ class GraphState(TypedDict):
     user_question: str
     retrieved_docs: list
     answer: str
-    sources: list  # deduplicated source URLs / references from retrieved docs
+    sources: list  # deduplicated source URLs from retrieved docs
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
         sources = []
         for doc in docs:
             src = doc.metadata.get("source") or doc.metadata.get("url") or doc.metadata.get("Source")
-            if src and src not in seen:
+            if src and src not in seen and src != "generated_toc":
                 seen.add(src)
                 sources.append(src)
 
