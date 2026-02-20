@@ -100,6 +100,11 @@ if len(msgs.messages) == 0:
         "How can I help you today?"
     )
 
+# Parallel list that stores source citations for each AI message.
+# Index i in msg_sources corresponds to the i-th AI message in msgs.messages.
+if "msg_sources" not in st.session_state:
+    st.session_state.msg_sources = [[]]  # first entry = greeting (no sources)
+
 # ---------------------------------------------------------------------------
 # Initialise agent (cached so it's created only once per session)
 # ---------------------------------------------------------------------------
@@ -114,8 +119,20 @@ agent = _get_agent(st.session_state.selected_model)
 # Render chat history
 # ---------------------------------------------------------------------------
 
+ai_index = 0  # tracks position in msg_sources
 for msg in msgs.messages:
     st.chat_message(msg.type).write(msg.content)
+    if msg.type == "ai":
+        sources = (
+            st.session_state.msg_sources[ai_index]
+            if ai_index < len(st.session_state.msg_sources)
+            else []
+        )
+        if sources:
+            with st.expander("Sources"):
+                for src in sources:
+                    st.markdown(f"- [{src}]({src})")
+        ai_index += 1
 
 # ---------------------------------------------------------------------------
 # Handle user input
@@ -131,11 +148,20 @@ if question := st.chat_input(
         try:
             result = agent.invoke({"user_question": question})
             answer = result["answer"]
+            sources = result.get("sources", [])
         except Exception as e:
             answer = (
                 "I'm sorry, an error occurred while processing your question. "
                 f"Please try again.\n\nError: {e}"
             )
+            sources = []
 
     msgs.add_ai_message(answer)
-    st.chat_message("ai").write(answer)
+    st.session_state.msg_sources.append(sources)
+
+    with st.chat_message("ai"):
+        st.write(answer)
+        if sources:
+            with st.expander("Sources"):
+                for src in sources:
+                    st.markdown(f"- [{src}]({src})")
