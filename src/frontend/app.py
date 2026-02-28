@@ -35,7 +35,7 @@ from src.agents.bi_agent import make_mvp_rag_agent, AVAILABLE_MODELS, DEFAULT_MO
 # Page config
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="BI Agent MVP - Cannondale Expert")
+st.set_page_config(page_title="BI Agent MVP - Cannondale Expert", layout="wide")
 
 # ---------------------------------------------------------------------------
 # Theme: light/dark toggle (persisted in session_state)
@@ -60,6 +60,8 @@ section[data-testid="stAppViewContainer"],
 }
 .stApp .main .block-container {
     background-color: #0e1117 !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
 }
 /* ---- Main content text ---- */
 .stApp h1, .stApp h2, .stApp h3, .stApp p, .stApp label, .stApp span,
@@ -189,6 +191,8 @@ section[data-testid="stAppViewContainer"],
 }
 .stApp .main .block-container {
     background-color: #ffffff !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
 }
 /* ---- Main content text ---- */
 .stApp h1, .stApp h2, .stApp h3, .stApp p, .stApp label, .stApp span,
