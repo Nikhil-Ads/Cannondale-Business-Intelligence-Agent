@@ -340,6 +340,58 @@ if selected_model != st.session_state.selected_model:
 st.sidebar.markdown(f"**Active model:** `{st.session_state.selected_model}`")
 
 # ---------------------------------------------------------------------------
+# Sidebar — Export Chat History
+# ---------------------------------------------------------------------------
+
+import csv as _csv
+import io as _io
+
+
+def _build_txt(messages) -> str:
+    """Format chat messages as plain text: [Role]: [Content]."""
+    lines = []
+    for msg in messages:
+        role = "Assistant" if msg.type == "ai" else "User"
+        lines.append(f"[{role}]: {msg.content}")
+    return "\n\n".join(lines)
+
+
+def _build_csv(messages) -> str:
+    """Format chat messages as CSV with Role, Content columns."""
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(["Role", "Content"])
+    for msg in messages:
+        role = "Assistant" if msg.type == "ai" else "User"
+        writer.writerow([role, msg.content])
+    return buf.getvalue()
+
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**💾 Export Chat**")
+
+if len(msgs.messages) > 1:
+    _col1, _col2 = st.sidebar.columns(2)
+    with _col1:
+        st.download_button(
+            label="📥 .txt",
+            data=_build_txt(msgs.messages),
+            file_name="chat_history.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+    with _col2:
+        st.download_button(
+            label="📊 .csv",
+            data=_build_csv(msgs.messages),
+            file_name="chat_history.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+else:
+    st.sidebar.caption("Start a conversation to enable export.")
+
+# ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
 
