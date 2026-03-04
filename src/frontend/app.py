@@ -356,6 +356,17 @@ def _build_txt(messages) -> str:
     return "\n\n".join(lines)
 
 
+def _sanitize_csv_cell(value: str) -> str:
+    """Sanitize CSV cell to prevent formula injection.
+
+    Prefixes cells starting with =, +, -, or @ with a single quote
+    to prevent spreadsheet applications from interpreting them as formulas.
+    """
+    if value and value[0] in ('=', '+', '-', '@'):
+        return "'" + value
+    return value
+
+
 def _build_csv(messages) -> str:
     """Format chat messages as CSV with Role, Content columns."""
     buf = _io.StringIO()
@@ -363,7 +374,8 @@ def _build_csv(messages) -> str:
     writer.writerow(["Role", "Content"])
     for msg in messages:
         role = "Assistant" if msg.type == "ai" else "User"
-        writer.writerow([role, msg.content])
+        sanitized_content = _sanitize_csv_cell(msg.content)
+        writer.writerow([role, sanitized_content])
     return buf.getvalue()
 
 
