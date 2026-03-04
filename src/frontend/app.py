@@ -340,7 +340,7 @@ if selected_model != st.session_state.selected_model:
 st.sidebar.markdown(f"**Active model:** `{st.session_state.selected_model}`")
 
 # ---------------------------------------------------------------------------
-# Sidebar — Export Chat History
+# Helper functions for Export Chat (defined early, used after msgs is ready)
 # ---------------------------------------------------------------------------
 
 import csv as _csv
@@ -367,29 +367,10 @@ def _build_csv(messages) -> str:
     return buf.getvalue()
 
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("**💾 Export Chat**")
+def _clear_chat():
+    st.session_state["langchain_messages"] = []
+    st.session_state["msg_sources"] = [[]]
 
-if len(msgs.messages) > 1:
-    _col1, _col2 = st.sidebar.columns(2)
-    with _col1:
-        st.download_button(
-            label="📥 .txt",
-            data=_build_txt(msgs.messages),
-            file_name="chat_history.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    with _col2:
-        st.download_button(
-            label="📊 .csv",
-            data=_build_csv(msgs.messages),
-            file_name="chat_history.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-else:
-    st.sidebar.caption("Start a conversation to enable export.")
 
 # ---------------------------------------------------------------------------
 # Header
@@ -437,6 +418,42 @@ if len(msgs.messages) == 0:
 # Index i in msg_sources corresponds to the i-th AI message in msgs.messages.
 if "msg_sources" not in st.session_state:
     st.session_state.msg_sources = [[]]  # first entry = greeting (no sources)
+
+# ---------------------------------------------------------------------------
+# Sidebar — Export Chat History & Clear Chat (placed here so msgs is defined)
+# ---------------------------------------------------------------------------
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**💾 Export Chat**")
+
+if len(msgs.messages) > 1:
+    _col1, _col2 = st.sidebar.columns(2)
+    with _col1:
+        st.download_button(
+            label="📥 .txt",
+            data=_build_txt(msgs.messages),
+            file_name="chat_history.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+    with _col2:
+        st.download_button(
+            label="📊 .csv",
+            data=_build_csv(msgs.messages),
+            file_name="chat_history.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+else:
+    st.sidebar.caption("Start a conversation to enable export.")
+
+st.sidebar.markdown("---")
+st.sidebar.button(
+    "🗑️ Clear Chat",
+    on_click=_clear_chat,
+    use_container_width=True,
+    help="Reset the conversation and start fresh",
+)
 
 # ---------------------------------------------------------------------------
 # Initialise agent (cached so it's created only once per session)
