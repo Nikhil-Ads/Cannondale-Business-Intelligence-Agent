@@ -426,24 +426,24 @@ if "msg_sources" not in st.session_state:
 st.sidebar.markdown("---")
 st.sidebar.markdown("**💾 Export Chat**")
 
-if len(msgs.messages) > 1:
-    _col1, _col2 = st.sidebar.columns(2)
-    with _col1:
-        st.download_button(
-            label="📥 .txt",
-            data=_build_txt(msgs.messages),
-            file_name="chat_history.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    with _col2:
-        st.download_button(
-            label="📊 .csv",
-            data=_build_csv(msgs.messages),
-            file_name="chat_history.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+_stored_messages = st.session_state.get("langchain_messages", [])
+if len(_stored_messages) > 1:
+    st.sidebar.download_button(
+        label="📥 Export as .txt",
+        data=_build_txt(_stored_messages),
+        file_name="chat_history.txt",
+        mime="text/plain",
+        key="export_txt",
+        use_container_width=True,
+    )
+    st.sidebar.download_button(
+        label="📊 Export as .csv",
+        data=_build_csv(_stored_messages),
+        file_name="chat_history.csv",
+        mime="text/csv",
+        key="export_csv",
+        use_container_width=True,
+    )
 else:
     st.sidebar.caption("Start a conversation to enable export.")
 
@@ -515,3 +515,7 @@ if question := st.chat_input(
             with st.expander("Sources"):
                 for src in sources:
                     st.markdown(f"- [{src}]({src})")
+
+    # Force a rerun so the sidebar Export Chat buttons reflect the updated
+    # session state (sidebar renders before messages are added in the same run)
+    st.rerun()
