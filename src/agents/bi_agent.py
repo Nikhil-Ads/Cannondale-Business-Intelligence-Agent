@@ -4,6 +4,9 @@ MVP Business Intelligence Agent using LangGraph.
 Implements a simple RAG pipeline:
     retrieve  -->  generate_answer  -->  END
 
+Also supports a multi-pass Critical Thinking mode:
+    decompose --> [retrieve + answer sub-question] x N --> critique --> synthesize --> END
+
 Model is configurable via make_mvp_rag_agent(model=...).
 Text-only insights (no charts, no tables).
 """
@@ -16,6 +19,7 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from typing import List
 from typing_extensions import TypedDict
 
 from langchain_openai import ChatOpenAI
@@ -68,6 +72,57 @@ QA_PROMPT = ChatPromptTemplate.from_messages(
         ("human", "{user_question}"),
     ]
 )
+
+
+# ---------------------------------------------------------------------------
+# Critical Thinking prompts
+# ---------------------------------------------------------------------------
+
+DECOMPOSE_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", (
+        "You are an expert analyst specialising in Cannondale Synapse bicycles. "
+        "Your job is to decompose a user's question into {n_subquestions} clear, "
+        "focused sub-questions that together fully cover the original question. "
+        "Return ONLY a numbered list of sub-questions, nothing else."
+    )),
+    ("human", "Question: {user_question}"),
+])
+
+SUBQUESTION_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", (
+        "You are an expert assistant specialising in Cannondale Synapse bicycles. "
+        "Use the retrieved context below to answer the specific sub-question. "
+        "Be concise and factual.\n\nContext:\n{context}"
+    )),
+    ("human", "Sub-question: {sub_question}"),
+])
+
+CRITIQUE_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", (
+        "You are a critical reviewer. Given the original question and the "
+        "sub-question answers below, identify: gaps in the analysis, "
+        "any contradictions, and what additional context would improve "
+        "the final answer. Be brief and specific."
+    )),
+    ("human", (
+        "Original question: {user_question}\n\n"
+        "Sub-question answers:\n{sub_answers}"
+    )),
+])
+
+SYNTHESIZE_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", (
+        "You are an expert assistant specialising in Cannondale Synapse bicycles. "
+        "Synthesize the sub-question answers and critique into a single, "
+        "comprehensive, well-structured answer to the original question. "
+        "Do not mention the reasoning process — just deliver the best possible answer."
+    )),
+    ("human", (
+        "Original question: {user_question}\n\n"
+        "Sub-question answers:\n{sub_answers}\n\n"
+        "Critique / gaps:\n{critique}"
+    )),
+])
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +218,138 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
     workflow.add_edge("generate_answer", END)
 
     return workflow.compile()
+
+
+# ---------------------------------------------------------------------------
+# Critical Thinking Agent (multi-pass)
+# ---------------------------------------------------------------------------
+
+def run_critical_thinking_agent(
+    user_question: str,
+    persist_dir: str = DEFAULT_PERSIST_DIR,
+    model: str = DEFAULT_MODEL,
+    num_passes: int = 3,
+) -> dict:
+    """
+    Multi-pass critical thinking agent.
+
+    Passes:
+      1. Decompose question into sub-questions
+      2..N-1. RAG retrieval + answer each sub-question
+      N-1. Critique — find gaps / contradictions
+      N. Synthesize into final answer
+
+    Parameters
+    ----------
+    user_question : str
+        The user's original question.
+    persist_dir : str
+        Path to the persisted Chroma vector store.
+    model : str
+        OpenAI model to use.
+    num_passes : int
+        Total number of reasoning passes (min 2, max 5).
+        Controls how many sub-questions are generated.
+
+    Returns
+    -------
+    dict with keys:
+        answer     : str   — final synthesized answer
+        sources    : list  — deduplicated source URLs
+        reasoning  : list  — list of (label, text) tuples for display
+    """
+    num_passes = max(2, min(5, num_passes))
+    # Number of sub-questions = passes - 2 (one pass for critique, one for synthesis)
+    # Minimum 1 sub-question
+    n_subquestions = max(1, num_passes - 2) if num_passes > 2 else 1
+
+    vectorstore = get_chroma_vectorstore(persist_dir=persist_dir)
+    retriever = get_retriever(vectorstore, k=5)
+    llm = ChatOpenAI(model=model, temperature=0.7)
+
+    reasoning: List[tuple] = []
+    all_sources: list = []
+
+    # ------------------------------------------------------------------
+    # Pass 1 — Decompose
+    # ------------------------------------------------------------------
+    print(f"--- CRITICAL THINKING: DECOMPOSE (n_subquestions={n_subquestions}) ---")
+    decompose_chain = DECOMPOSE_PROMPT | llm
+    decompose_response = decompose_chain.invoke({
+        "user_question": user_question,
+        "n_subquestions": n_subquestions,
+    })
+    decompose_text = decompose_response.content.strip()
+    reasoning.append(("🔍 Pass 1 — Decompose", decompose_text))
+
+    # Parse sub-questions from numbered list
+    sub_questions = []
+    for line in decompose_text.splitlines():
+        line = line.strip()
+        if line and line[0].isdigit():
+            # Strip leading "1. ", "2) ", etc.
+            parts = line.split(".", 1) if "." in line else line.split(")", 1)
+            if len(parts) == 2:
+                sub_questions.append(parts[1].strip())
+    if not sub_questions:
+        sub_questions = [user_question]
+
+    # ------------------------------------------------------------------
+    # Passes 2..N-1 — Research each sub-question
+    # ------------------------------------------------------------------
+    sub_answers_parts = []
+    subq_chain = SUBQUESTION_PROMPT | llm
+
+    for i, sub_q in enumerate(sub_questions, start=1):
+        print(f"--- CRITICAL THINKING: SUB-QUESTION {i} ---")
+        docs = retriever.invoke(sub_q)
+
+        # Collect sources
+        seen = set()
+        for doc in docs:
+            src = doc.metadata.get("source") or doc.metadata.get("url") or doc.metadata.get("Source")
+            if src and src not in seen and src != "generated_toc":
+                seen.add(src)
+                if src not in all_sources:
+                    all_sources.append(src)
+
+        context = "\n\n".join(doc.page_content for doc in docs)
+        sub_response = subq_chain.invoke({"context": context, "sub_question": sub_q})
+        sub_answer = sub_response.content.strip()
+        sub_answers_parts.append(f"**Q{i}: {sub_q}**\n{sub_answer}")
+        reasoning.append((f"🔬 Pass {i + 1} — Sub-question {i}", f"**{sub_q}**\n\n{sub_answer}"))
+
+    sub_answers_text = "\n\n".join(sub_answers_parts)
+
+    # ------------------------------------------------------------------
+    # Pass N-1 — Critique
+    # ------------------------------------------------------------------
+    print("--- CRITICAL THINKING: CRITIQUE ---")
+    critique_chain = CRITIQUE_PROMPT | llm
+    critique_response = critique_chain.invoke({
+        "user_question": user_question,
+        "sub_answers": sub_answers_text,
+    })
+    critique_text = critique_response.content.strip()
+    critique_pass_num = len(sub_questions) + 2
+    reasoning.append((f"🧐 Pass {critique_pass_num} — Critique", critique_text))
+
+    # ------------------------------------------------------------------
+    # Pass N — Synthesize
+    # ------------------------------------------------------------------
+    print("--- CRITICAL THINKING: SYNTHESIZE ---")
+    synthesize_chain = SYNTHESIZE_PROMPT | llm
+    synthesize_response = synthesize_chain.invoke({
+        "user_question": user_question,
+        "sub_answers": sub_answers_text,
+        "critique": critique_text,
+    })
+    final_answer = synthesize_response.content.strip()
+    synth_pass_num = critique_pass_num + 1
+    reasoning.append((f"✅ Pass {synth_pass_num} — Synthesize", final_answer))
+
+    return {
+        "answer": final_answer,
+        "sources": all_sources,
+        "reasoning": reasoning,
+    }
