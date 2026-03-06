@@ -29,7 +29,7 @@ VECTORSTORE_DIR = str(BASE_DIR / "res" / "data" / "cannondale_vectorstore")
 os.environ["OPENAI_API_KEY"] = yaml.safe_load(open(CREDENTIALS_PATH))["openai"]
 
 # Import after env var is set so OpenAI clients pick it up
-from src.agents.bi_agent import make_mvp_rag_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
+from src.agents.bi_agent import make_mvp_rag_agent, run_critical_thinking_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -340,6 +340,29 @@ if selected_model != st.session_state.selected_model:
 st.sidebar.markdown(f"**Active model:** `{st.session_state.selected_model}`")
 
 # ---------------------------------------------------------------------------
+# Sidebar — Critical Thinking Mode
+# ---------------------------------------------------------------------------
+
+st.sidebar.markdown("---")
+
+if "critical_thinking" not in st.session_state:
+    st.session_state.critical_thinking = False
+if "num_passes" not in st.session_state:
+    st.session_state.num_passes = 3
+
+st.sidebar.toggle("🧠 Critical Thinking Mode", key="critical_thinking")
+
+if st.session_state.critical_thinking:
+    st.session_state.num_passes = st.sidebar.slider(
+        "Reasoning Passes",
+        min_value=2,
+        max_value=5,
+        value=st.session_state.num_passes,
+        help="More passes = deeper reasoning but slower response",
+    )
+    st.sidebar.caption(f"⚡ {st.session_state.num_passes} passes active")
+
+# ---------------------------------------------------------------------------
 # Helper functions for Export Chat (defined early, used after msgs is ready)
 # ---------------------------------------------------------------------------
 
@@ -382,6 +405,7 @@ def _build_csv(messages) -> str:
 def _clear_chat():
     st.session_state["langchain_messages"] = []
     st.session_state["msg_sources"] = [[]]
+    st.session_state["msg_reasoning"] = [[]]
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +454,8 @@ if len(msgs.messages) == 0:
 # Index i in msg_sources corresponds to the i-th AI message in msgs.messages.
 if "msg_sources" not in st.session_state:
     st.session_state.msg_sources = [[]]  # first entry = greeting (no sources)
+if "msg_reasoning" not in st.session_state:
+    st.session_state.msg_reasoning = [[]]  # first entry = greeting (no reasoning)
 
 # ---------------------------------------------------------------------------
 # Sidebar — Export Chat History & Clear Chat (placed here so msgs is defined)
@@ -481,20 +507,34 @@ agent = _get_agent(st.session_state.selected_model)
 # Render chat history
 # ---------------------------------------------------------------------------
 
-ai_index = 0  # tracks position in msg_sources
+ai_index = 0  # tracks position in msg_sources and msg_reasoning
 for msg in msgs.messages:
-    st.chat_message(msg.type).write(msg.content)
     if msg.type == "ai":
+        reasoning = (
+            st.session_state.msg_reasoning[ai_index]
+            if ai_index < len(st.session_state.msg_reasoning)
+            else []
+        )
         sources = (
             st.session_state.msg_sources[ai_index]
             if ai_index < len(st.session_state.msg_sources)
             else []
         )
-        if sources:
-            with st.expander("Sources"):
-                for src in sources:
-                    st.markdown(f"- [{src}]({src})")
+        with st.chat_message("ai"):
+            if reasoning:
+                with st.expander("🧠 Reasoning Steps", expanded=False):
+                    for label, content in reasoning:
+                        st.markdown(f"**{label}**")
+                        st.markdown(content)
+                        st.markdown("---")
+            st.write(msg.content)
+            if sources:
+                with st.expander("Sources"):
+                    for src in sources:
+                        st.markdown(f"- [{src}]({src})")
         ai_index += 1
+    else:
+        st.chat_message(msg.type).write(msg.content)
 
 # ---------------------------------------------------------------------------
 # Handle user input
@@ -506,27 +546,44 @@ if question := st.chat_input(
     st.chat_message("human").write(question)
     msgs.add_user_message(question)
 
-    with st.spinner("Thinking..."):
-        try:
-            result = agent.invoke({"user_question": question})
-            answer = result["answer"]
-            sources = result.get("sources", [])
-        except Exception as e:
-            answer = (
-                "I'm sorry, an error occurred while processing your question. "
-                f"Please try again.\n\nError: {e}"
-            )
-            sources = []
+    reasoning_steps = []
+
+    if st.session_state.critical_thinking:
+        spinner_msg = f"🧠 Thinking critically ({st.session_state.num_passes} passes)..."
+        with st.spinner(spinner_msg):
+            try:
+                result = run_critical_thinking_agent(
+                    user_question=question,
+                    persist_dir=VECTORSTORE_DIR,
+                    model=st.session_state.selected_model,
+                    num_passes=st.session_state.num_passes,
+                )
+                answer = result["answer"]
+                sources = result.get("sources", [])
+                reasoning_steps = result.get("reasoning", [])
+            except Exception as e:
+                answer = (
+                    "I'm sorry, an error occurred during critical thinking. "
+                    f"Please try again.\n\nError: {e}"
+                )
+                sources = []
+    else:
+        with st.spinner("Thinking..."):
+            try:
+                result = agent.invoke({"user_question": question})
+                answer = result["answer"]
+                sources = result.get("sources", [])
+            except Exception as e:
+                answer = (
+                    "I'm sorry, an error occurred while processing your question. "
+                    f"Please try again.\n\nError: {e}"
+                )
+                sources = []
 
     msgs.add_ai_message(answer)
     st.session_state.msg_sources.append(sources)
-
-    with st.chat_message("ai"):
-        st.write(answer)
-        if sources:
-            with st.expander("Sources"):
-                for src in sources:
-                    st.markdown(f"- [{src}]({src})")
+    # Store all passes except the final synthesis (which is the answer itself)
+    st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
 
     # Force a rerun so the sidebar Export Chat buttons reflect the updated
     # session state (sidebar renders before messages are added in the same run)
