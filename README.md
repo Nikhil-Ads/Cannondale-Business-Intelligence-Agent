@@ -2,6 +2,10 @@
 
 An AI-powered business intelligence agent that answers questions about Cannondale Synapse bicycles. It scrapes product data from the Cannondale website, builds a vector knowledge base, and provides text-based insights through a conversational Streamlit interface using Retrieval-Augmented Generation (RAG).
 
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for branch workflow, pull request guidelines, and development conventions.
+
 ## Tech Stack
 
 | Category | Technologies |
