@@ -14,9 +14,12 @@ _BASE_DIR = pathlib.Path(__file__).resolve().parents[2]
 if str(_BASE_DIR) not in sys.path:
     sys.path.insert(0, str(_BASE_DIR))
 
+import logging
 import yaml
 import streamlit as st
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Project paths & credentials
@@ -347,20 +350,21 @@ st.sidebar.markdown("---")
 
 if "critical_thinking" not in st.session_state:
     st.session_state.critical_thinking = False
-if "num_passes" not in st.session_state:
-    st.session_state.num_passes = 3
+if "num_subquestions" not in st.session_state:
+    st.session_state.num_subquestions = 3
 
 st.sidebar.toggle("🧠 Critical Thinking Mode", key="critical_thinking")
 
 if st.session_state.critical_thinking:
-    st.session_state.num_passes = st.sidebar.slider(
-        "Reasoning Passes",
-        min_value=2,
+    st.session_state.num_subquestions = st.sidebar.slider(
+        "Sub-questions",
+        min_value=1,
         max_value=5,
-        value=st.session_state.num_passes,
-        help="More passes = deeper reasoning but slower response",
+        value=st.session_state.num_subquestions,
+        help="Number of sub-questions to decompose the query into. More = deeper reasoning but slower response.",
     )
-    st.sidebar.caption(f"⚡ {st.session_state.num_passes} passes active")
+    total_stages = st.session_state.num_subquestions + 3
+    st.sidebar.caption(f"⚡ {st.session_state.num_subquestions} sub-questions · {total_stages} total stages")
 
 # ---------------------------------------------------------------------------
 # Helper functions for Export Chat (defined early, used after msgs is ready)
@@ -549,19 +553,21 @@ if question := st.chat_input(
     reasoning_steps = []
 
     if st.session_state.critical_thinking:
-        spinner_msg = f"🧠 Thinking critically ({st.session_state.num_passes} passes)..."
+        n_subq = st.session_state.num_subquestions
+        spinner_msg = f"🧠 Thinking critically ({n_subq} sub-questions, {n_subq + 3} stages)..."
         with st.spinner(spinner_msg):
             try:
                 result = run_critical_thinking_agent(
                     user_question=question,
                     persist_dir=VECTORSTORE_DIR,
                     model=st.session_state.selected_model,
-                    num_passes=st.session_state.num_passes,
+                    num_subquestions=n_subq,
                 )
                 answer = result["answer"]
                 sources = result.get("sources", [])
                 reasoning_steps = result.get("reasoning", [])
             except Exception as e:
+                logger.exception("Critical thinking agent failed")
                 answer = (
                     "I'm sorry, an error occurred during critical thinking. "
                     f"Please try again.\n\nError: {e}"

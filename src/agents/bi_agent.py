@@ -19,7 +19,8 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from typing import List
+import re
+from typing import List, Tuple
 from typing_extensions import TypedDict
 
 from langchain_openai import ChatOpenAI
@@ -228,16 +229,16 @@ def run_critical_thinking_agent(
     user_question: str,
     persist_dir: str = DEFAULT_PERSIST_DIR,
     model: str = DEFAULT_MODEL,
-    num_passes: int = 3,
+    num_subquestions: int = 3,
 ) -> dict:
     """
     Multi-pass critical thinking agent.
 
-    Passes:
+    Stages:
       1. Decompose question into sub-questions
-      2..N-1. RAG retrieval + answer each sub-question
-      N-1. Critique — find gaps / contradictions
-      N. Synthesize into final answer
+      2..N. RAG retrieval + answer each sub-question
+      N+1. Critique — find gaps / contradictions
+      N+2. Synthesize into final answer
 
     Parameters
     ----------
@@ -247,9 +248,9 @@ def run_critical_thinking_agent(
         Path to the persisted Chroma vector store.
     model : str
         OpenAI model to use.
-    num_passes : int
-        Total number of reasoning passes (min 2, max 5).
-        Controls how many sub-questions are generated.
+    num_subquestions : int
+        Number of sub-questions to decompose the query into (min 1, max 5).
+        Total stages = num_subquestions + 3 (decompose, critique, synthesize).
 
     Returns
     -------
@@ -258,17 +259,14 @@ def run_critical_thinking_agent(
         sources    : list  — deduplicated source URLs
         reasoning  : list  — list of (label, text) tuples for display
     """
-    num_passes = max(2, min(5, num_passes))
-    # Number of sub-questions = passes - 2 (one pass for critique, one for synthesis)
-    # Minimum 1 sub-question
-    n_subquestions = max(1, num_passes - 2) if num_passes > 2 else 1
+    n_subquestions = max(1, min(5, num_subquestions))
 
     vectorstore = get_chroma_vectorstore(persist_dir=persist_dir)
     retriever = get_retriever(vectorstore, k=5)
     llm = ChatOpenAI(model=model, temperature=0.7)
 
-    reasoning: List[tuple] = []
-    all_sources: list = []
+    reasoning: List[Tuple[str, str]] = []
+    all_sources: List[str] = []
 
     # ------------------------------------------------------------------
     # Pass 1 — Decompose
@@ -282,15 +280,12 @@ def run_critical_thinking_agent(
     decompose_text = decompose_response.content.strip()
     reasoning.append(("🔍 Pass 1 — Decompose", decompose_text))
 
-    # Parse sub-questions from numbered list
-    sub_questions = []
-    for line in decompose_text.splitlines():
-        line = line.strip()
-        if line and line[0].isdigit():
-            # Strip leading "1. ", "2) ", etc.
-            parts = line.split(".", 1) if "." in line else line.split(")", 1)
-            if len(parts) == 2:
-                sub_questions.append(parts[1].strip())
+    # Parse sub-questions from numbered list; handle "1.", "1)", "1:" formats
+    sub_questions = [
+        m.group(1).strip()
+        for line in decompose_text.splitlines()
+        if (m := re.match(r'^\d+[.):\-]\s*(.+)', line.strip()))
+    ]
     if not sub_questions:
         sub_questions = [user_question]
 
