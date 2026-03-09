@@ -14,16 +14,16 @@ Welcome! This document outlines the workflow and conventions for contributing to
 
 ### Branch Protection
 
-- **`main` is protected**: Direct pushes are disabled.
-- All changes to `main` must come via a **pull request from `dev`**.
-- PRs to `main` require **at least one approval** before merging.
-- **Force pushes to `main` are disabled** — history rewrites are not allowed.
+- **Policy for `main`**: direct pushes should be disabled via branch protection.
+- All changes to `main` should come via a **pull request from `dev`**.
+- PRs to `main` should require **at least one approval** before merging.
+- **Force pushes to `main` should be disabled** — history rewrites are not allowed.
 
 ---
 
 ## 🔄 Pull Request Workflow
 
-```
+```text
 1. Create feature branch from dev
        ↓
 2. Implement + test locally
