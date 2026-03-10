@@ -8,7 +8,7 @@ Also supports a multi-pass Critical Thinking mode:
     decompose --> [retrieve + answer sub-question] x N --> critique --> synthesize --> END
 
 Model is configurable via make_mvp_rag_agent(model=...).
-Text-only insights (no charts, no tables).
+Supports optional <chart_data> JSON blocks for front-end visualizations.
 """
 
 import sys
@@ -64,8 +64,26 @@ When answering:
 Context:
 {context}
 
-Provide clear, detailed explanations that help customers make informed
-decisions. Return text-only insights — no charts, no tables."""
+Provide clear, detailed explanations that help customers make informed decisions.
+
+When your response contains comparable data across multiple models — such as
+prices, weights, component specs, or feature lists — optionally append a single
+<chart_data> JSON block at the very end of your response (after all prose) so
+the UI can render an interactive chart. Use this format:
+
+For bar/line charts:
+<chart_data>
+{{"type": "bar", "title": "...", "x": ["Model A", "Model B"], "y": [1299, 1999], "labels": {{"x": "Model", "y": "Price (USD)"}}}}
+</chart_data>
+
+For tabular comparisons:
+<chart_data>
+{{"type": "table", "title": "...", "columns": ["Model", "Price", "Weight"], "rows": [["Carbon 1", "$3999", "8.1 kg"], ["Carbon 2", "$2999", "8.4 kg"]]}}
+</chart_data>
+
+Only include the <chart_data> block when it genuinely adds value (skip it for
+simple factual questions). Do not include markdown fences or extra text inside
+the block — only valid JSON."""
 
 QA_PROMPT = ChatPromptTemplate.from_messages(
     [
@@ -116,7 +134,14 @@ SYNTHESIZE_PROMPT = ChatPromptTemplate.from_messages([
         "You are an expert assistant specialising in Cannondale Synapse bicycles. "
         "Synthesize the sub-question answers and critique into a single, "
         "comprehensive, well-structured answer to the original question. "
-        "Do not mention the reasoning process — just deliver the best possible answer."
+        "Do not mention the reasoning process — just deliver the best possible answer. "
+        "When your answer contains comparable data across models (prices, specs, "
+        "features), optionally append a <chart_data> JSON block at the very end "
+        "using format: "
+        "{{'type': 'bar'|'line'|'table', 'title': '...', 'x': [...], 'y': [...], "
+        "'labels': {{'x': '...', 'y': '...'}}}} for charts or "
+        "{{'type': 'table', 'title': '...', 'columns': [...], 'rows': [[...]]}} "
+        "for tables. Only include it when it adds real value."
     )),
     ("human", (
         "Original question: {user_question}\n\n"

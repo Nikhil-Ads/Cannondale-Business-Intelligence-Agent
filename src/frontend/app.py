@@ -14,7 +14,9 @@ _BASE_DIR = pathlib.Path(__file__).resolve().parents[2]
 if str(_BASE_DIR) not in sys.path:
     sys.path.insert(0, str(_BASE_DIR))
 
+import json
 import logging
+import re
 import yaml
 import streamlit as st
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
@@ -33,6 +35,9 @@ os.environ["OPENAI_API_KEY"] = yaml.safe_load(open(CREDENTIALS_PATH))["openai"]
 
 # Import after env var is set so OpenAI clients pick it up
 from src.agents.bi_agent import make_mvp_rag_agent, run_critical_thinking_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
+import pandas as pd  # noqa: E402
+import plotly.express as px  # noqa: E402
+import plotly.graph_objects as go  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -406,10 +411,65 @@ def _build_csv(messages) -> str:
     return buf.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# Chart helpers
+# ---------------------------------------------------------------------------
+
+_CHART_RE = re.compile(r'<chart_data>\s*(.*?)\s*</chart_data>', re.DOTALL)
+
+
+def _parse_chart_data(text: str):
+    """Extract <chart_data> block from text.
+
+    Returns (clean_text, chart_dict_or_None). The block is stripped from the
+    returned text so prose renders without stray JSON.
+    """
+    match = _CHART_RE.search(text)
+    if not match:
+        return text, None
+    clean_text = _CHART_RE.sub('', text).strip()
+    try:
+        chart = json.loads(match.group(1))
+        return clean_text, chart
+    except (json.JSONDecodeError, ValueError):
+        return clean_text, None
+
+
+def _render_chart(chart_data: dict) -> None:
+    """Render a Plotly chart or dataframe from a chart_data dict."""
+    chart_type = chart_data.get("type", "bar")
+    title = chart_data.get("title", "")
+    template = "plotly_dark" if st.session_state.dark_mode else "plotly"
+
+    if chart_type == "table":
+        columns = chart_data.get("columns", [])
+        rows = chart_data.get("rows", [])
+        if columns and rows:
+            df = pd.DataFrame(rows, columns=columns)
+            if title:
+                st.caption(f"**{title}**")
+            st.dataframe(df, width="stretch")
+
+    elif chart_type in ("bar", "line"):
+        x = chart_data.get("x", [])
+        y = chart_data.get("y", [])
+        labels = chart_data.get("labels", {})
+        if x and y:
+            if chart_type == "bar":
+                fig = px.bar(x=x, y=y, title=title, labels=labels, template=template)
+            else:
+                fig = px.line(
+                    x=x, y=y, title=title, labels=labels,
+                    markers=True, template=template,
+                )
+            st.plotly_chart(fig, width="stretch")
+
+
 def _clear_chat():
     st.session_state["langchain_messages"] = []
     st.session_state["msg_sources"] = [[]]
     st.session_state["msg_reasoning"] = [[]]
+    st.session_state["msg_charts"] = [None]
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +520,8 @@ if "msg_sources" not in st.session_state:
     st.session_state.msg_sources = [[]]  # first entry = greeting (no sources)
 if "msg_reasoning" not in st.session_state:
     st.session_state.msg_reasoning = [[]]  # first entry = greeting (no reasoning)
+if "msg_charts" not in st.session_state:
+    st.session_state.msg_charts = [None]  # first entry = greeting (no chart)
 
 # ---------------------------------------------------------------------------
 # Sidebar — Export Chat History & Clear Chat (placed here so msgs is defined)
@@ -476,7 +538,7 @@ if len(_stored_messages) > 1:
         file_name="chat_history.txt",
         mime="text/plain",
         key="export_txt",
-        use_container_width=True,
+        width="stretch",
     )
     st.sidebar.download_button(
         label="📊 Export as .csv",
@@ -484,7 +546,7 @@ if len(_stored_messages) > 1:
         file_name="chat_history.csv",
         mime="text/csv",
         key="export_csv",
-        use_container_width=True,
+        width="stretch",
     )
 else:
     st.sidebar.caption("Start a conversation to enable export.")
@@ -493,7 +555,7 @@ st.sidebar.markdown("---")
 st.sidebar.button(
     "🗑️ Clear Chat",
     on_click=_clear_chat,
-    use_container_width=True,
+    width="stretch",
     help="Reset the conversation and start fresh",
 )
 
@@ -511,7 +573,7 @@ agent = _get_agent(st.session_state.selected_model)
 # Render chat history
 # ---------------------------------------------------------------------------
 
-ai_index = 0  # tracks position in msg_sources and msg_reasoning
+ai_index = 0  # tracks position in msg_sources, msg_reasoning, msg_charts
 for msg in msgs.messages:
     if msg.type == "ai":
         reasoning = (
@@ -524,6 +586,11 @@ for msg in msgs.messages:
             if ai_index < len(st.session_state.msg_sources)
             else []
         )
+        chart_data = (
+            st.session_state.msg_charts[ai_index]
+            if ai_index < len(st.session_state.msg_charts)
+            else None
+        )
         with st.chat_message("ai"):
             if reasoning:
                 with st.expander("🧠 Reasoning Steps", expanded=False):
@@ -532,6 +599,8 @@ for msg in msgs.messages:
                         st.markdown(content)
                         st.markdown("---")
             st.write(msg.content)
+            if chart_data:
+                _render_chart(chart_data)
             if sources:
                 with st.expander("Sources"):
                     for src in sources:
@@ -586,8 +655,11 @@ if question := st.chat_input(
                 )
                 sources = []
 
-    msgs.add_ai_message(answer)
+    # Parse optional chart block; store clean prose in history, chart separately
+    clean_answer, chart_data = _parse_chart_data(answer)
+    msgs.add_ai_message(clean_answer)
     st.session_state.msg_sources.append(sources)
+    st.session_state.msg_charts.append(chart_data)
     # Store all passes except the final synthesis (which is the answer itself)
     st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
 
