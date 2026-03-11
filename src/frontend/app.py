@@ -470,6 +470,7 @@ def _clear_chat():
     st.session_state["msg_sources"] = [[]]
     st.session_state["msg_reasoning"] = [[]]
     st.session_state["msg_charts"] = [None]
+    st.session_state["msg_feedback"] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -522,6 +523,8 @@ if "msg_reasoning" not in st.session_state:
     st.session_state.msg_reasoning = [[]]  # first entry = greeting (no reasoning)
 if "msg_charts" not in st.session_state:
     st.session_state.msg_charts = [None]  # first entry = greeting (no chart)
+if "msg_feedback" not in st.session_state:
+    st.session_state.msg_feedback = {}  # {ai_index: "up" | "down"}
 
 # ---------------------------------------------------------------------------
 # Sidebar — Export Chat History & Clear Chat (placed here so msgs is defined)
@@ -605,6 +608,22 @@ for msg in msgs.messages:
                 with st.expander("Sources"):
                     for src in sources:
                         st.markdown(f"- [{src}]({src})")
+            # Feedback buttons — skip for the greeting message (index 0)
+            if ai_index > 0:
+                fb = st.session_state.msg_feedback.get(ai_index)
+                col1, col2, col3 = st.columns([1, 1, 10])
+                with col1:
+                    if st.button("👍", key=f"up_{ai_index}", disabled=fb is not None):
+                        st.session_state.msg_feedback[ai_index] = "up"
+                        st.rerun()
+                with col2:
+                    if st.button("👎", key=f"down_{ai_index}", disabled=fb is not None):
+                        st.session_state.msg_feedback[ai_index] = "down"
+                        st.rerun()
+                if fb == "up":
+                    col3.caption("✅ Thanks for the feedback!")
+                elif fb == "down":
+                    col3.caption("🙏 Thanks — we'll work on improving that!")
         ai_index += 1
     else:
         st.chat_message(msg.type).write(msg.content)
