@@ -20,6 +20,7 @@ import re
 import yaml
 import streamlit as st
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
+from langchain_core.messages import HumanMessage, AIMessage
 
 logger = logging.getLogger(__name__)
 
@@ -379,6 +380,23 @@ import csv as _csv
 import io as _io
 
 
+def _build_chat_history(messages, k=6):
+    """Convert recent chat messages to LangChain message objects for context injection.
+
+    k=6 pairs (12 messages) gives enough context for multi-turn follow-ups
+    without bloating the prompt for long conversations.
+    """
+    history = messages[1:]  # drop the greeting message
+    history = history[-(k * 2):]  # keep last k human+ai pairs
+    result = []
+    for msg in history:
+        if msg.type == "human":
+            result.append(HumanMessage(content=msg.content))
+        elif msg.type == "ai":
+            result.append(AIMessage(content=msg.content))
+    return result
+
+
 def _build_txt(messages) -> str:
     """Format chat messages as plain text: [Role]: [Content]."""
     lines = []
@@ -639,6 +657,7 @@ if question := st.chat_input(
     msgs.add_user_message(question)
 
     reasoning_steps = []
+    chat_history = _build_chat_history(msgs.messages)
 
     if st.session_state.critical_thinking:
         n_subq = st.session_state.num_subquestions
@@ -650,6 +669,7 @@ if question := st.chat_input(
                     persist_dir=VECTORSTORE_DIR,
                     model=st.session_state.selected_model,
                     num_subquestions=n_subq,
+                    chat_history=chat_history,
                 )
                 answer = result["answer"]
                 sources = result.get("sources", [])
@@ -664,7 +684,7 @@ if question := st.chat_input(
     else:
         with st.spinner("Thinking..."):
             try:
-                result = agent.invoke({"user_question": question})
+                result = agent.invoke({"user_question": question, "chat_history": chat_history})
                 answer = result["answer"]
                 sources = result.get("sources", [])
             except Exception as e:

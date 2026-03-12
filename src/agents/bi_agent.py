@@ -24,7 +24,7 @@ from typing import List, Tuple
 from typing_extensions import TypedDict
 
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, StateGraph
 
 from src.utils.db_utils import get_chroma_vectorstore, get_retriever
@@ -88,6 +88,7 @@ the block — only valid JSON."""
 QA_PROMPT = ChatPromptTemplate.from_messages(
     [
         ("system", QA_SYSTEM_PROMPT),
+        MessagesPlaceholder(variable_name="chat_history", optional=True),
         ("human", "{user_question}"),
     ]
 )
@@ -104,6 +105,7 @@ DECOMPOSE_PROMPT = ChatPromptTemplate.from_messages([
         "focused sub-questions that together fully cover the original question. "
         "Return ONLY a numbered list of sub-questions, nothing else."
     )),
+    MessagesPlaceholder(variable_name="chat_history", optional=True),
     ("human", "Question: {user_question}"),
 ])
 
@@ -159,6 +161,7 @@ class GraphState(TypedDict):
     """State flowing through the LangGraph RAG pipeline."""
 
     user_question: str
+    chat_history: list  # list of LangChain BaseMessage objects (HumanMessage/AIMessage)
     retrieved_docs: list
     answer: str
     sources: list  # deduplicated source URLs from retrieved docs
@@ -225,7 +228,7 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
         question = state["user_question"]
 
         response = answer_chain.invoke(
-            {"context": context, "user_question": question}
+            {"context": context, "user_question": question, "chat_history": state.get("chat_history", [])}
         )
 
         return {"answer": response.content}
@@ -255,6 +258,7 @@ def run_critical_thinking_agent(
     persist_dir: str = DEFAULT_PERSIST_DIR,
     model: str = DEFAULT_MODEL,
     num_subquestions: int = 3,
+    chat_history: list = None,
 ) -> dict:
     """
     Multi-pass critical thinking agent.
@@ -301,6 +305,7 @@ def run_critical_thinking_agent(
     decompose_response = decompose_chain.invoke({
         "user_question": user_question,
         "n_subquestions": n_subquestions,
+        "chat_history": chat_history or [],
     })
     decompose_text = decompose_response.content.strip()
     reasoning.append(("🔍 Pass 1 — Decompose", decompose_text))
