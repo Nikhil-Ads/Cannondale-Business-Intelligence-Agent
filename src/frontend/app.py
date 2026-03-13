@@ -36,6 +36,7 @@ os.environ["OPENAI_API_KEY"] = yaml.safe_load(open(CREDENTIALS_PATH))["openai"]
 
 # Import after env var is set so OpenAI clients pick it up
 from src.agents.bi_agent import make_mvp_rag_agent, run_critical_thinking_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
+from src.utils.markdown_utils import sanitize_markdown  # noqa: E402
 import pandas as pd  # noqa: E402
 import plotly.express as px  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
@@ -619,7 +620,7 @@ for msg in msgs.messages:
                         st.markdown(f"**{label}**")
                         st.markdown(content)
                         st.markdown("---")
-            st.write(msg.content)
+            st.markdown(sanitize_markdown(msg.content))
             if chart_data:
                 _render_chart(chart_data)
             if sources:
