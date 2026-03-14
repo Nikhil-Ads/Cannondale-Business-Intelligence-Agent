@@ -17,8 +17,10 @@ if str(_BASE_DIR) not in sys.path:
 import json
 import logging
 import re
+import uuid
 import yaml
 import streamlit as st
+from src.utils.history_utils import save_history, load_history, list_sessions  # noqa: E402
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -53,6 +55,17 @@ st.set_page_config(page_title="BI Agent MVP - Cannondale Expert", layout="wide")
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
+
+# Persist session_id in the URL query params so it survives page refreshes.
+# On first load: generate a new ID and write it to the URL.
+# On refresh: read it back from the URL (session_state is reset but query_params survive).
+if "session_id" not in st.session_state:
+    _qp_id = st.query_params.get("session_id")
+    if _qp_id:
+        st.session_state.session_id = _qp_id
+    else:
+        st.session_state.session_id = str(uuid.uuid4())[:8]
+        st.query_params["session_id"] = st.session_state.session_id
 
 # Inject theme CSS early so it applies to the whole app.
 # Use high specificity and !important so we override Streamlit's defaults.
@@ -528,6 +541,22 @@ with st.expander("Example questions"):
 # ---------------------------------------------------------------------------
 
 msgs = StreamlitChatMessageHistory(key="langchain_messages")
+
+# Load persisted history if available (before adding greeting)
+if "history_loaded" not in st.session_state:
+    st.session_state.history_loaded = True
+    saved = load_history(st.session_state.session_id)
+    if saved:
+        from langchain_core.messages import HumanMessage as _HM, AIMessage as _AM
+        lc_msgs = []
+        for m in saved:
+            if m["type"] == "human":
+                lc_msgs.append(_HM(content=m["content"]))
+            elif m["type"] == "ai":
+                lc_msgs.append(_AM(content=m["content"]))
+        if lc_msgs:
+            msgs.add_messages(lc_msgs)
+
 if len(msgs.messages) == 0:
     msgs.add_ai_message(
         "Hello! I'm your Cannondale Synapse bicycle expert. "
@@ -574,6 +603,20 @@ else:
     st.sidebar.caption("Start a conversation to enable export.")
 
 st.sidebar.markdown("---")
+if st.sidebar.button("💬 New Chat", help="Start a new conversation (saves current)", width="stretch"):
+    new_id = str(uuid.uuid4())[:8]
+    st.session_state.session_id = new_id
+    st.query_params["session_id"] = new_id
+    st.session_state.history_loaded = False
+    st.session_state.msg_sources = [[]]
+    st.session_state.msg_reasoning = [[]]
+    st.session_state.msg_charts = [None]
+    st.session_state.msg_feedback = {}
+    msgs.clear()
+    st.rerun()
+
+st.sidebar.caption(f"Session: `{st.session_state.session_id}`")
+
 st.sidebar.button(
     "🗑️ Clear Chat",
     on_click=_clear_chat,
@@ -698,6 +741,7 @@ if question := st.chat_input(
     # Parse optional chart block; store clean prose in history, chart separately
     clean_answer, chart_data = _parse_chart_data(answer)
     msgs.add_ai_message(clean_answer)
+    save_history(st.session_state.session_id, msgs.messages)
     st.session_state.msg_sources.append(sources)
     st.session_state.msg_charts.append(chart_data)
     # Store all passes except the final synthesis (which is the answer itself)
