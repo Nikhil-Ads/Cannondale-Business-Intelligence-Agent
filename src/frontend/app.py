@@ -21,6 +21,7 @@ import uuid
 import yaml
 import streamlit as st
 from src.utils.history_utils import save_history, load_history, list_sessions  # noqa: E402
+from src.backend.feedback_db import init_db as _init_feedback_db, save_feedback as _save_feedback  # noqa: E402
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -574,6 +575,9 @@ if "msg_charts" not in st.session_state:
 if "msg_feedback" not in st.session_state:
     st.session_state.msg_feedback = {}  # {ai_index: "up" | "down"}
 
+# Initialise feedback DB (creates table if needed)
+_init_feedback_db()
+
 # ---------------------------------------------------------------------------
 # Sidebar — Export Chat History & Clear Chat (placed here so msgs is defined)
 # ---------------------------------------------------------------------------
@@ -674,13 +678,25 @@ for msg in msgs.messages:
             if ai_index > 0:
                 fb = st.session_state.msg_feedback.get(ai_index)
                 col1, col2, col3 = st.columns([1, 1, 10])
+                # Retrieve context for this ai_index to log with the feedback
+                _fb_question = ""
+                _fb_answer = msg.content[:200] if hasattr(msg, "content") else ""
+                # Walk back through messages to find the preceding human message
+                _all = msgs.messages
+                _ai_positions = [i for i, m in enumerate(_all) if m.type == "ai"]
+                if ai_index < len(_ai_positions):
+                    _pos = _ai_positions[ai_index]
+                    if _pos > 0 and _all[_pos - 1].type == "human":
+                        _fb_question = _all[_pos - 1].content
                 with col1:
                     if st.button("👍", key=f"up_{ai_index}", disabled=fb is not None):
                         st.session_state.msg_feedback[ai_index] = "up"
+                        _save_feedback(st.session_state.get("session_id", "unknown"), ai_index, _fb_question, _fb_answer, "up")
                         st.rerun()
                 with col2:
                     if st.button("👎", key=f"down_{ai_index}", disabled=fb is not None):
                         st.session_state.msg_feedback[ai_index] = "down"
+                        _save_feedback(st.session_state.get("session_id", "unknown"), ai_index, _fb_question, _fb_answer, "down")
                         st.rerun()
                 if fb == "up":
                     col3.caption("✅ Thanks for the feedback!")
