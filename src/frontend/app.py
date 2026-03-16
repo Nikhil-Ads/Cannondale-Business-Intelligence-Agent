@@ -503,6 +503,7 @@ def _clear_chat():
     st.session_state["msg_sources"] = [[]]
     st.session_state["msg_reasoning"] = [[]]
     st.session_state["msg_charts"] = [None]
+    st.session_state["msg_confidence"] = [None]
     st.session_state["msg_feedback"] = {}
 
 
@@ -572,6 +573,8 @@ if "msg_reasoning" not in st.session_state:
     st.session_state.msg_reasoning = [[]]  # first entry = greeting (no reasoning)
 if "msg_charts" not in st.session_state:
     st.session_state.msg_charts = [None]  # first entry = greeting (no chart)
+if "msg_confidence" not in st.session_state:
+    st.session_state.msg_confidence = [None]  # first entry = greeting (no confidence)
 if "msg_feedback" not in st.session_state:
     st.session_state.msg_feedback = {}  # {ai_index: "up" | "down"}
 
@@ -615,6 +618,7 @@ if st.sidebar.button("💬 New Chat", help="Start a new conversation (saves curr
     st.session_state.msg_sources = [[]]
     st.session_state.msg_reasoning = [[]]
     st.session_state.msg_charts = [None]
+    st.session_state.msg_confidence = [None]
     st.session_state.msg_feedback = {}
     msgs.clear()
     st.rerun()
@@ -660,6 +664,11 @@ for msg in msgs.messages:
             if ai_index < len(st.session_state.msg_charts)
             else None
         )
+        confidence = (
+            st.session_state.msg_confidence[ai_index]
+            if ai_index < len(st.session_state.msg_confidence)
+            else None
+        )
         with st.chat_message("ai"):
             if reasoning:
                 with st.expander("🧠 Reasoning Steps", expanded=False):
@@ -670,6 +679,11 @@ for msg in msgs.messages:
             st.markdown(sanitize_markdown(msg.content))
             if chart_data:
                 _render_chart(chart_data)
+            if ai_index > 0 and confidence:
+                n_sources = len(sources) if sources else 0
+                st.caption(
+                    f"{confidence['emoji']} {confidence['level']} confidence · {n_sources} sources"
+                )
             if sources:
                 with st.expander("Sources"):
                     for src in sources:
@@ -717,6 +731,7 @@ if question := st.chat_input(
     msgs.add_user_message(question)
 
     reasoning_steps = []
+    confidence = None
     chat_history = _build_chat_history(msgs.messages)
 
     if st.session_state.critical_thinking:
@@ -734,6 +749,7 @@ if question := st.chat_input(
                 answer = result["answer"]
                 sources = result.get("sources", [])
                 reasoning_steps = result.get("reasoning", [])
+                confidence = result.get("confidence")
             except Exception as e:
                 logger.exception("Critical thinking agent failed")
                 answer = (
@@ -747,6 +763,7 @@ if question := st.chat_input(
                 result = agent.invoke({"user_question": question, "chat_history": chat_history})
                 answer = result["answer"]
                 sources = result.get("sources", [])
+                confidence = result.get("confidence")
             except Exception as e:
                 answer = (
                     "I'm sorry, an error occurred while processing your question. "
@@ -760,6 +777,7 @@ if question := st.chat_input(
     save_history(st.session_state.session_id, msgs.messages)
     st.session_state.msg_sources.append(sources)
     st.session_state.msg_charts.append(chart_data)
+    st.session_state.msg_confidence.append(confidence)
     # Store all passes except the final synthesis (which is the answer itself)
     st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
 
