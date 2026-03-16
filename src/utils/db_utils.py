@@ -45,6 +45,27 @@ def get_chroma_vectorstore(
     return vectorstore
 
 
+def get_docs_with_scores(vectorstore: Chroma, query: str, k: int = 5) -> list:
+    """
+    Retrieve documents along with their relevance scores.
+
+    Parameters
+    ----------
+    vectorstore : Chroma
+        The Chroma vector store to query.
+    query : str
+        The search query.
+    k : int
+        Number of top results to retrieve.
+
+    Returns
+    -------
+    list of (Document, float) tuples
+        Each tuple contains a LangChain Document and its relevance score in [0, 1].
+    """
+    return vectorstore.similarity_search_with_relevance_scores(query, k=k)
+
+
 def get_retriever(vectorstore: Chroma, k: int = 5):
     """
     Create a retriever from a Chroma vector store.

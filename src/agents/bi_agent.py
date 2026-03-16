@@ -27,7 +27,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, StateGraph
 
-from src.utils.db_utils import get_chroma_vectorstore, get_retriever
+from src.utils.db_utils import get_chroma_vectorstore, get_retriever, get_docs_with_scores
+from src.utils.confidence_utils import compute_confidence
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -165,6 +166,7 @@ class GraphState(TypedDict):
     retrieved_docs: list
     answer: str
     sources: list  # deduplicated source URLs from retrieved docs
+    confidence: dict  # confidence level dict from compute_confidence
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +209,9 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
         """Retrieve relevant documents from the vector store."""
         print("--- RETRIEVE ---")
         question = state["user_question"]
-        docs = retriever.invoke(question)
+        docs_and_scores = get_docs_with_scores(vectorstore, question, k=5)
+        docs = [doc for doc, _ in docs_and_scores]
+        scores = [score for _, score in docs_and_scores]
 
         # Extract and deduplicate source URLs from document metadata
         seen = set()
@@ -218,7 +222,8 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
                 seen.add(src)
                 sources.append(src)
 
-        return {"retrieved_docs": docs, "sources": sources}
+        confidence = compute_confidence(scores)
+        return {"retrieved_docs": docs, "sources": sources, "confidence": confidence}
 
     def generate_answer(state: GraphState) -> dict:
         """Generate a text answer from the retrieved context."""
@@ -291,11 +296,11 @@ def run_critical_thinking_agent(
     n_subquestions = max(1, min(5, num_subquestions))
 
     vectorstore = get_chroma_vectorstore(persist_dir=persist_dir)
-    retriever = get_retriever(vectorstore, k=5)
     llm = ChatOpenAI(model=model, temperature=0.7)
 
     reasoning: List[Tuple[str, str]] = []
     all_sources: List[str] = []
+    first_scores: List[float] = []
 
     # ------------------------------------------------------------------
     # Pass 1 — Decompose
@@ -327,7 +332,12 @@ def run_critical_thinking_agent(
 
     for i, sub_q in enumerate(sub_questions, start=1):
         print(f"--- CRITICAL THINKING: SUB-QUESTION {i} ---")
-        docs = retriever.invoke(sub_q)
+        docs_and_scores = get_docs_with_scores(vectorstore, sub_q, k=5)
+        docs = [doc for doc, _ in docs_and_scores]
+        scores = [score for _, score in docs_and_scores]
+
+        if i == 1:
+            first_scores = scores
 
         # Collect sources
         seen = set()
@@ -377,4 +387,5 @@ def run_critical_thinking_agent(
         "answer": final_answer,
         "sources": all_sources,
         "reasoning": reasoning,
+        "confidence": compute_confidence(first_scores),
     }
