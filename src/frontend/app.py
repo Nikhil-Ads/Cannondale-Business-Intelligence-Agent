@@ -14,10 +14,16 @@ _BASE_DIR = pathlib.Path(__file__).resolve().parents[2]
 if str(_BASE_DIR) not in sys.path:
     sys.path.insert(0, str(_BASE_DIR))
 
+import json
 import logging
+import re
+import uuid
 import yaml
 import streamlit as st
+from src.utils.history_utils import save_history, load_history, list_sessions  # noqa: E402
+from src.backend.feedback_db import init_db as _init_feedback_db, save_feedback as _save_feedback  # noqa: E402
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
+from langchain_core.messages import HumanMessage, AIMessage
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +39,10 @@ os.environ["OPENAI_API_KEY"] = yaml.safe_load(open(CREDENTIALS_PATH))["openai"]
 
 # Import after env var is set so OpenAI clients pick it up
 from src.agents.bi_agent import make_mvp_rag_agent, run_critical_thinking_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
+from src.utils.markdown_utils import sanitize_markdown  # noqa: E402
+import pandas as pd  # noqa: E402
+import plotly.express as px  # noqa: E402
+import plotly.graph_objects as go  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -46,6 +56,17 @@ st.set_page_config(page_title="BI Agent MVP - Cannondale Expert", layout="wide")
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
+
+# Persist session_id in the URL query params so it survives page refreshes.
+# On first load: generate a new ID and write it to the URL.
+# On refresh: read it back from the URL (session_state is reset but query_params survive).
+if "session_id" not in st.session_state:
+    _qp_id = st.query_params.get("session_id")
+    if _qp_id:
+        st.session_state.session_id = _qp_id
+    else:
+        st.session_state.session_id = str(uuid.uuid4())[:8]
+        st.query_params["session_id"] = st.session_state.session_id
 
 # Inject theme CSS early so it applies to the whole app.
 # Use high specificity and !important so we override Streamlit's defaults.
@@ -374,6 +395,23 @@ import csv as _csv
 import io as _io
 
 
+def _build_chat_history(messages, k=6):
+    """Convert recent chat messages to LangChain message objects for context injection.
+
+    k=6 pairs (12 messages) gives enough context for multi-turn follow-ups
+    without bloating the prompt for long conversations.
+    """
+    history = messages[1:]  # drop the greeting message
+    history = history[-(k * 2):]  # keep last k human+ai pairs
+    result = []
+    for msg in history:
+        if msg.type == "human":
+            result.append(HumanMessage(content=msg.content))
+        elif msg.type == "ai":
+            result.append(AIMessage(content=msg.content))
+    return result
+
+
 def _build_txt(messages) -> str:
     """Format chat messages as plain text: [Role]: [Content]."""
     lines = []
@@ -406,10 +444,67 @@ def _build_csv(messages) -> str:
     return buf.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# Chart helpers
+# ---------------------------------------------------------------------------
+
+_CHART_RE = re.compile(r'<chart_data>\s*(.*?)\s*</chart_data>', re.DOTALL)
+
+
+def _parse_chart_data(text: str):
+    """Extract <chart_data> block from text.
+
+    Returns (clean_text, chart_dict_or_None). The block is stripped from the
+    returned text so prose renders without stray JSON.
+    """
+    match = _CHART_RE.search(text)
+    if not match:
+        return text, None
+    clean_text = _CHART_RE.sub('', text).strip()
+    try:
+        chart = json.loads(match.group(1))
+        return clean_text, chart
+    except (json.JSONDecodeError, ValueError):
+        return clean_text, None
+
+
+def _render_chart(chart_data: dict) -> None:
+    """Render a Plotly chart or dataframe from a chart_data dict."""
+    chart_type = chart_data.get("type", "bar")
+    title = chart_data.get("title", "")
+    template = "plotly_dark" if st.session_state.dark_mode else "plotly"
+
+    if chart_type == "table":
+        columns = chart_data.get("columns", [])
+        rows = chart_data.get("rows", [])
+        if columns and rows:
+            df = pd.DataFrame(rows, columns=columns)
+            if title:
+                st.caption(f"**{title}**")
+            st.dataframe(df, width="stretch")
+
+    elif chart_type in ("bar", "line"):
+        x = chart_data.get("x", [])
+        y = chart_data.get("y", [])
+        labels = chart_data.get("labels", {})
+        if x and y:
+            if chart_type == "bar":
+                fig = px.bar(x=x, y=y, title=title, labels=labels, template=template)
+            else:
+                fig = px.line(
+                    x=x, y=y, title=title, labels=labels,
+                    markers=True, template=template,
+                )
+            st.plotly_chart(fig, width="stretch")
+
+
 def _clear_chat():
     st.session_state["langchain_messages"] = []
     st.session_state["msg_sources"] = [[]]
     st.session_state["msg_reasoning"] = [[]]
+    st.session_state["msg_charts"] = [None]
+    st.session_state["msg_confidence"] = [None]
+    st.session_state["msg_feedback"] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +543,21 @@ with st.expander("Example questions"):
 # ---------------------------------------------------------------------------
 
 msgs = StreamlitChatMessageHistory(key="langchain_messages")
+
+# Load persisted history if available (before adding greeting)
+if "history_loaded" not in st.session_state:
+    st.session_state.history_loaded = True
+    saved = load_history(st.session_state.session_id)
+    if saved:
+        lc_msgs = []
+        for m in saved:
+            if m["type"] == "human":
+                lc_msgs.append(HumanMessage(content=m["content"]))
+            elif m["type"] == "ai":
+                lc_msgs.append(AIMessage(content=m["content"]))
+        if lc_msgs:
+            msgs.add_messages(lc_msgs)
+
 if len(msgs.messages) == 0:
     msgs.add_ai_message(
         "Hello! I'm your Cannondale Synapse bicycle expert. "
@@ -460,6 +570,15 @@ if "msg_sources" not in st.session_state:
     st.session_state.msg_sources = [[]]  # first entry = greeting (no sources)
 if "msg_reasoning" not in st.session_state:
     st.session_state.msg_reasoning = [[]]  # first entry = greeting (no reasoning)
+if "msg_charts" not in st.session_state:
+    st.session_state.msg_charts = [None]  # first entry = greeting (no chart)
+if "msg_confidence" not in st.session_state:
+    st.session_state.msg_confidence = [None]  # first entry = greeting (no confidence)
+if "msg_feedback" not in st.session_state:
+    st.session_state.msg_feedback = {}  # {ai_index: "up" | "down"}
+
+# Initialise feedback DB (creates table if needed)
+_init_feedback_db()
 
 # ---------------------------------------------------------------------------
 # Sidebar — Export Chat History & Clear Chat (placed here so msgs is defined)
@@ -476,7 +595,7 @@ if len(_stored_messages) > 1:
         file_name="chat_history.txt",
         mime="text/plain",
         key="export_txt",
-        use_container_width=True,
+        width="stretch",
     )
     st.sidebar.download_button(
         label="📊 Export as .csv",
@@ -484,16 +603,31 @@ if len(_stored_messages) > 1:
         file_name="chat_history.csv",
         mime="text/csv",
         key="export_csv",
-        use_container_width=True,
+        width="stretch",
     )
 else:
     st.sidebar.caption("Start a conversation to enable export.")
 
 st.sidebar.markdown("---")
+if st.sidebar.button("💬 New Chat", help="Start a new conversation (saves current)", width="stretch"):
+    new_id = str(uuid.uuid4())[:8]
+    st.session_state.session_id = new_id
+    st.query_params["session_id"] = new_id
+    st.session_state.history_loaded = False
+    st.session_state.msg_sources = [[]]
+    st.session_state.msg_reasoning = [[]]
+    st.session_state.msg_charts = [None]
+    st.session_state.msg_confidence = [None]
+    st.session_state.msg_feedback = {}
+    msgs.clear()
+    st.rerun()
+
+st.sidebar.caption(f"Session: `{st.session_state.session_id}`")
+
 st.sidebar.button(
     "🗑️ Clear Chat",
     on_click=_clear_chat,
-    use_container_width=True,
+    width="stretch",
     help="Reset the conversation and start fresh",
 )
 
@@ -511,7 +645,7 @@ agent = _get_agent(st.session_state.selected_model)
 # Render chat history
 # ---------------------------------------------------------------------------
 
-ai_index = 0  # tracks position in msg_sources and msg_reasoning
+ai_index = 0  # tracks position in msg_sources, msg_reasoning, msg_charts
 for msg in msgs.messages:
     if msg.type == "ai":
         reasoning = (
@@ -524,6 +658,16 @@ for msg in msgs.messages:
             if ai_index < len(st.session_state.msg_sources)
             else []
         )
+        chart_data = (
+            st.session_state.msg_charts[ai_index]
+            if ai_index < len(st.session_state.msg_charts)
+            else None
+        )
+        confidence = (
+            st.session_state.msg_confidence[ai_index]
+            if ai_index < len(st.session_state.msg_confidence)
+            else None
+        )
         with st.chat_message("ai"):
             if reasoning:
                 with st.expander("🧠 Reasoning Steps", expanded=False):
@@ -531,11 +675,46 @@ for msg in msgs.messages:
                         st.markdown(f"**{label}**")
                         st.markdown(content)
                         st.markdown("---")
-            st.write(msg.content)
+            st.markdown(sanitize_markdown(msg.content))
+            if chart_data:
+                _render_chart(chart_data)
+            if ai_index > 0 and confidence:
+                n_sources = len(sources) if sources else 0
+                st.caption(
+                    f"{confidence['emoji']} {confidence['level']} confidence · {n_sources} sources"
+                )
             if sources:
                 with st.expander("Sources"):
                     for src in sources:
                         st.markdown(f"- [{src}]({src})")
+            # Feedback buttons — skip for the greeting message (index 0)
+            if ai_index > 0:
+                fb = st.session_state.msg_feedback.get(ai_index)
+                col1, col2, col3 = st.columns([1, 1, 10])
+                # Retrieve context for this ai_index to log with the feedback
+                _fb_question = ""
+                _fb_answer = msg.content[:200] if hasattr(msg, "content") else ""
+                # Walk back through messages to find the preceding human message
+                _all = msgs.messages
+                _ai_positions = [i for i, m in enumerate(_all) if m.type == "ai"]
+                if ai_index < len(_ai_positions):
+                    _pos = _ai_positions[ai_index]
+                    if _pos > 0 and _all[_pos - 1].type == "human":
+                        _fb_question = _all[_pos - 1].content
+                with col1:
+                    if st.button("👍", key=f"up_{ai_index}", disabled=fb is not None):
+                        st.session_state.msg_feedback[ai_index] = "up"
+                        _save_feedback(st.session_state.get("session_id", "unknown"), ai_index, _fb_question, _fb_answer, "up")
+                        st.rerun()
+                with col2:
+                    if st.button("👎", key=f"down_{ai_index}", disabled=fb is not None):
+                        st.session_state.msg_feedback[ai_index] = "down"
+                        _save_feedback(st.session_state.get("session_id", "unknown"), ai_index, _fb_question, _fb_answer, "down")
+                        st.rerun()
+                if fb == "up":
+                    col3.caption("✅ Thanks for the feedback!")
+                elif fb == "down":
+                    col3.caption("🙏 Thanks — we'll work on improving that!")
         ai_index += 1
     else:
         st.chat_message(msg.type).write(msg.content)
@@ -551,6 +730,8 @@ if question := st.chat_input(
     msgs.add_user_message(question)
 
     reasoning_steps = []
+    confidence = None
+    chat_history = _build_chat_history(msgs.messages)
 
     if st.session_state.critical_thinking:
         n_subq = st.session_state.num_subquestions
@@ -562,10 +743,12 @@ if question := st.chat_input(
                     persist_dir=VECTORSTORE_DIR,
                     model=st.session_state.selected_model,
                     num_subquestions=n_subq,
+                    chat_history=chat_history,
                 )
                 answer = result["answer"]
                 sources = result.get("sources", [])
                 reasoning_steps = result.get("reasoning", [])
+                confidence = result.get("confidence")
             except Exception as e:
                 logger.exception("Critical thinking agent failed")
                 answer = (
@@ -576,18 +759,25 @@ if question := st.chat_input(
     else:
         with st.spinner("Thinking..."):
             try:
-                result = agent.invoke({"user_question": question})
+                result = agent.invoke({"user_question": question, "chat_history": chat_history})
                 answer = result["answer"]
                 sources = result.get("sources", [])
+                confidence = result.get("confidence")
             except Exception as e:
+                logger.exception("Standard inference failed")
                 answer = (
                     "I'm sorry, an error occurred while processing your question. "
                     f"Please try again.\n\nError: {e}"
                 )
                 sources = []
 
-    msgs.add_ai_message(answer)
+    # Parse optional chart block; store clean prose in history, chart separately
+    clean_answer, chart_data = _parse_chart_data(answer)
+    msgs.add_ai_message(clean_answer)
+    save_history(st.session_state.session_id, msgs.messages)
     st.session_state.msg_sources.append(sources)
+    st.session_state.msg_charts.append(chart_data)
+    st.session_state.msg_confidence.append(confidence)
     # Store all passes except the final synthesis (which is the answer itself)
     st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
 

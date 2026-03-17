@@ -8,7 +8,7 @@ Also supports a multi-pass Critical Thinking mode:
     decompose --> [retrieve + answer sub-question] x N --> critique --> synthesize --> END
 
 Model is configurable via make_mvp_rag_agent(model=...).
-Text-only insights (no charts, no tables).
+Supports optional <chart_data> JSON blocks for front-end visualizations.
 """
 
 import sys
@@ -24,10 +24,13 @@ from typing import List, Tuple
 from typing_extensions import TypedDict
 
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
+from langchain_core.messages import BaseMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, StateGraph
 
-from src.utils.db_utils import get_chroma_vectorstore, get_retriever
+from src.utils.db_utils import get_chroma_vectorstore, get_retriever, get_docs_with_scores
+from src.utils.confidence_utils import compute_confidence
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -64,12 +67,31 @@ When answering:
 Context:
 {context}
 
-Provide clear, detailed explanations that help customers make informed
-decisions. Return text-only insights — no charts, no tables."""
+Provide clear, detailed explanations that help customers make informed decisions.
+
+When your response contains comparable data across multiple models — such as
+prices, weights, component specs, or feature lists — optionally append a single
+<chart_data> JSON block at the very end of your response (after all prose) so
+the UI can render an interactive chart. Use this format:
+
+For bar/line charts:
+<chart_data>
+{{"type": "bar", "title": "...", "x": ["Model A", "Model B"], "y": [1299, 1999], "labels": {{"x": "Model", "y": "Price (USD)"}}}}
+</chart_data>
+
+For tabular comparisons:
+<chart_data>
+{{"type": "table", "title": "...", "columns": ["Model", "Price", "Weight"], "rows": [["Carbon 1", "$3999", "8.1 kg"], ["Carbon 2", "$2999", "8.4 kg"]]}}
+</chart_data>
+
+Only include the <chart_data> block when it genuinely adds value (skip it for
+simple factual questions). Do not include markdown fences or extra text inside
+the block — only valid JSON."""
 
 QA_PROMPT = ChatPromptTemplate.from_messages(
     [
         ("system", QA_SYSTEM_PROMPT),
+        MessagesPlaceholder(variable_name="chat_history", optional=True),
         ("human", "{user_question}"),
     ]
 )
@@ -86,6 +108,7 @@ DECOMPOSE_PROMPT = ChatPromptTemplate.from_messages([
         "focused sub-questions that together fully cover the original question. "
         "Return ONLY a numbered list of sub-questions, nothing else."
     )),
+    MessagesPlaceholder(variable_name="chat_history", optional=True),
     ("human", "Question: {user_question}"),
 ])
 
@@ -116,7 +139,14 @@ SYNTHESIZE_PROMPT = ChatPromptTemplate.from_messages([
         "You are an expert assistant specialising in Cannondale Synapse bicycles. "
         "Synthesize the sub-question answers and critique into a single, "
         "comprehensive, well-structured answer to the original question. "
-        "Do not mention the reasoning process — just deliver the best possible answer."
+        "Do not mention the reasoning process — just deliver the best possible answer. "
+        "When your answer contains comparable data across models (prices, specs, "
+        "features), optionally append a <chart_data> JSON block at the very end "
+        "using format: "
+        "{{'type': 'bar'|'line'|'table', 'title': '...', 'x': [...], 'y': [...], "
+        "'labels': {{'x': '...', 'y': '...'}}}} for charts or "
+        "{{'type': 'table', 'title': '...', 'columns': [...], 'rows': [[...]]}} "
+        "for tables. Only include it when it adds real value."
     )),
     ("human", (
         "Original question: {user_question}\n\n"
@@ -134,9 +164,11 @@ class GraphState(TypedDict):
     """State flowing through the LangGraph RAG pipeline."""
 
     user_question: str
-    retrieved_docs: list
+    chat_history: list[BaseMessage]
+    retrieved_docs: list[Document]
     answer: str
-    sources: list  # deduplicated source URLs from retrieved docs
+    sources: list[str]
+    confidence: dict[str, str | float]
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +211,9 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
         """Retrieve relevant documents from the vector store."""
         print("--- RETRIEVE ---")
         question = state["user_question"]
-        docs = retriever.invoke(question)
+        docs_and_scores = get_docs_with_scores(vectorstore, question, k=5)
+        docs = [doc for doc, _ in docs_and_scores]
+        scores = [score for _, score in docs_and_scores]
 
         # Extract and deduplicate source URLs from document metadata
         seen = set()
@@ -190,7 +224,8 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
                 seen.add(src)
                 sources.append(src)
 
-        return {"retrieved_docs": docs, "sources": sources}
+        confidence = compute_confidence(scores)
+        return {"retrieved_docs": docs, "sources": sources, "confidence": confidence}
 
     def generate_answer(state: GraphState) -> dict:
         """Generate a text answer from the retrieved context."""
@@ -200,7 +235,7 @@ def make_mvp_rag_agent(persist_dir: str = DEFAULT_PERSIST_DIR, model: str = DEFA
         question = state["user_question"]
 
         response = answer_chain.invoke(
-            {"context": context, "user_question": question}
+            {"context": context, "user_question": question, "chat_history": state.get("chat_history", [])}
         )
 
         return {"answer": response.content}
@@ -230,6 +265,7 @@ def run_critical_thinking_agent(
     persist_dir: str = DEFAULT_PERSIST_DIR,
     model: str = DEFAULT_MODEL,
     num_subquestions: int = 3,
+    chat_history: list | None = None,
 ) -> dict:
     """
     Multi-pass critical thinking agent.
@@ -262,11 +298,11 @@ def run_critical_thinking_agent(
     n_subquestions = max(1, min(5, num_subquestions))
 
     vectorstore = get_chroma_vectorstore(persist_dir=persist_dir)
-    retriever = get_retriever(vectorstore, k=5)
     llm = ChatOpenAI(model=model, temperature=0.7)
 
     reasoning: List[Tuple[str, str]] = []
     all_sources: List[str] = []
+    first_scores: List[float] = []
 
     # ------------------------------------------------------------------
     # Pass 1 — Decompose
@@ -276,6 +312,7 @@ def run_critical_thinking_agent(
     decompose_response = decompose_chain.invoke({
         "user_question": user_question,
         "n_subquestions": n_subquestions,
+        "chat_history": chat_history or [],
     })
     decompose_text = decompose_response.content.strip()
     reasoning.append(("🔍 Pass 1 — Decompose", decompose_text))
@@ -297,7 +334,12 @@ def run_critical_thinking_agent(
 
     for i, sub_q in enumerate(sub_questions, start=1):
         print(f"--- CRITICAL THINKING: SUB-QUESTION {i} ---")
-        docs = retriever.invoke(sub_q)
+        docs_and_scores = get_docs_with_scores(vectorstore, sub_q, k=5)
+        docs = [doc for doc, _ in docs_and_scores]
+        scores = [score for _, score in docs_and_scores]
+
+        if i == 1:
+            first_scores = scores
 
         # Collect sources
         seen = set()
@@ -347,4 +389,5 @@ def run_critical_thinking_agent(
         "answer": final_answer,
         "sources": all_sources,
         "reasoning": reasoning,
+        "confidence": compute_confidence(first_scores),
     }
