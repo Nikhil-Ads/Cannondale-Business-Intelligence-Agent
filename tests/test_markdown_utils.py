@@ -90,3 +90,9 @@ def test_multiple_unclosed_bolds():
     text = "**price* here\n**value* there"
     result = sanitize_markdown(text)
     assert result == "**price** here\n**value** there"
+
+
+def test_adjacent_bold_spans():
+    """Multiple bold spans on the same line should be handled correctly."""
+    text = "**first** and **second**"
+    assert sanitize_markdown(text) == text

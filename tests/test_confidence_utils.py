@@ -9,6 +9,8 @@ import pytest
 # (which transitively loads langchain_chroma and other heavy dependencies)
 _MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "src" / "utils" / "confidence_utils.py"
 _spec = importlib.util.spec_from_file_location("confidence_utils", _MODULE_PATH)
+if _spec is None or _spec.loader is None:
+    pytest.skip("Could not load confidence_utils module", allow_module_level=True)
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 

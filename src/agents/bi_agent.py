@@ -24,6 +24,8 @@ from typing import List, Tuple
 from typing_extensions import TypedDict
 
 from langchain_openai import ChatOpenAI
+from langchain_core.documents import Document
+from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, StateGraph
 
@@ -162,11 +164,11 @@ class GraphState(TypedDict):
     """State flowing through the LangGraph RAG pipeline."""
 
     user_question: str
-    chat_history: list  # list of LangChain BaseMessage objects (HumanMessage/AIMessage)
-    retrieved_docs: list
+    chat_history: list[BaseMessage]
+    retrieved_docs: list[Document]
     answer: str
-    sources: list  # deduplicated source URLs from retrieved docs
-    confidence: dict  # confidence level dict from compute_confidence
+    sources: list[str]
+    confidence: dict[str, str | float]
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +265,7 @@ def run_critical_thinking_agent(
     persist_dir: str = DEFAULT_PERSIST_DIR,
     model: str = DEFAULT_MODEL,
     num_subquestions: int = 3,
-    chat_history: list = None,
+    chat_history: list | None = None,
 ) -> dict:
     """
     Multi-pass critical thinking agent.

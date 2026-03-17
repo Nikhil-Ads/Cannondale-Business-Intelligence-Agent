@@ -74,9 +74,14 @@ def test_get_summary_with_data(tmp_db):
 
 
 def test_save_feedback_never_raises(tmp_db):
-    # DB not initialised — should not raise
-    fdb.save_feedback(None, None, None, None, "up")  # type: ignore[arg-type]
+    # DB not initialised — should not raise even with valid inputs
+    fdb.save_feedback("s", 1, "q", "a", "up")
     fdb.save_feedback("s", 1, "q", "a", "invalid_rating")
+
+
+def test_save_feedback_none_inputs_never_raises(tmp_db):
+    # None inputs should not raise; guard coerces None to "" before slicing
+    fdb.save_feedback(None, None, None, None, "up")  # type: ignore[arg-type]
 
 
 def test_get_recent_returns_list(tmp_db):

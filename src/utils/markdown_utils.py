@@ -20,14 +20,13 @@ def sanitize_markdown(text: str) -> str:
         _stash.append(m.group(0))
         return f'\x00S{len(_stash) - 1}\x00'
 
-    # Fenced code blocks first (multi-line), then inline code
+    # Fenced code blocks first (multi-line), then inline code (allow empty spans)
     text = re.sub(r'```[\s\S]*?```', _stash_block, text)
-    text = re.sub(r'`[^`\n]+`', _stash_block, text)
+    text = re.sub(r'`[^`\n]*`', _stash_block, text)
 
     # Fix unclosed bold: **text* → **text**
-    # (?<!\w) ensures we only match opening ** (not the closing ** of valid bold).
-    # Matches ** then content without * or newline (non-greedy),
-    # then a single * not followed by another *.
+    # (?<!\w) prevents matching inside words (e.g. mid-word **).
+    # Captures content between ** and a lone trailing * (not followed by another *).
     text = re.sub(r'(?<!\w)\*\*([^*\n]+?)\*(?!\*)', r'**\1**', text)
 
     # Remove stray single asterisks line by line

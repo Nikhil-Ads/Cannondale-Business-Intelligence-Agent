@@ -549,13 +549,12 @@ if "history_loaded" not in st.session_state:
     st.session_state.history_loaded = True
     saved = load_history(st.session_state.session_id)
     if saved:
-        from langchain_core.messages import HumanMessage as _HM, AIMessage as _AM
         lc_msgs = []
         for m in saved:
             if m["type"] == "human":
-                lc_msgs.append(_HM(content=m["content"]))
+                lc_msgs.append(HumanMessage(content=m["content"]))
             elif m["type"] == "ai":
-                lc_msgs.append(_AM(content=m["content"]))
+                lc_msgs.append(AIMessage(content=m["content"]))
         if lc_msgs:
             msgs.add_messages(lc_msgs)
 
@@ -765,6 +764,7 @@ if question := st.chat_input(
                 sources = result.get("sources", [])
                 confidence = result.get("confidence")
             except Exception as e:
+                logger.exception("Standard inference failed")
                 answer = (
                     "I'm sorry, an error occurred while processing your question. "
                     f"Please try again.\n\nError: {e}"

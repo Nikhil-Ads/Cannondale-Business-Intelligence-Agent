@@ -3,11 +3,21 @@ Utility functions for computing confidence levels from ChromaDB retrieval
 similarity scores.
 """
 
+from typing import TypedDict
+
 HIGH_THRESHOLD = 0.75
 MEDIUM_THRESHOLD = 0.50
 
 
-def compute_confidence(scores: list[float]) -> dict:
+class ConfidenceResult(TypedDict):
+    """Typed result returned by compute_confidence."""
+
+    level: str
+    emoji: str
+    top_score: float
+
+
+def compute_confidence(scores: list[float]) -> ConfidenceResult:
     """
     Compute a confidence level from a list of 0-1 relevance scores.
 
