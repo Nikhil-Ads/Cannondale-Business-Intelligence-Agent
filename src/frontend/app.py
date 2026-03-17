@@ -40,6 +40,7 @@ os.environ["OPENAI_API_KEY"] = yaml.safe_load(open(CREDENTIALS_PATH))["openai"]
 # Import after env var is set so OpenAI clients pick it up
 from src.agents.bi_agent import make_mvp_rag_agent, run_critical_thinking_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
 from src.utils.markdown_utils import sanitize_markdown  # noqa: E402
+from src.utils.followup_utils import generate_followup_suggestions  # noqa: E402
 import pandas as pd  # noqa: E402
 import plotly.express as px  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
@@ -504,6 +505,7 @@ def _clear_chat():
     st.session_state["msg_reasoning"] = [[]]
     st.session_state["msg_charts"] = [None]
     st.session_state["msg_confidence"] = [None]
+    st.session_state["msg_followups"] = [None]
     st.session_state["msg_feedback"] = {}
 
 
@@ -574,6 +576,8 @@ if "msg_charts" not in st.session_state:
     st.session_state.msg_charts = [None]  # first entry = greeting (no chart)
 if "msg_confidence" not in st.session_state:
     st.session_state.msg_confidence = [None]  # first entry = greeting (no confidence)
+if "msg_followups" not in st.session_state:
+    st.session_state.msg_followups = [None]  # first entry = greeting (no follow-ups)
 if "msg_feedback" not in st.session_state:
     st.session_state.msg_feedback = {}  # {ai_index: "up" | "down"}
 
@@ -618,6 +622,7 @@ if st.sidebar.button("💬 New Chat", help="Start a new conversation (saves curr
     st.session_state.msg_reasoning = [[]]
     st.session_state.msg_charts = [None]
     st.session_state.msg_confidence = [None]
+    st.session_state.msg_followups = [None]
     st.session_state.msg_feedback = {}
     msgs.clear()
     st.rerun()
@@ -683,6 +688,20 @@ for msg in msgs.messages:
                 st.caption(
                     f"{confidence['emoji']} {confidence['level']} confidence · {n_sources} sources"
                 )
+            # Follow-up suggestions
+            followups = (
+                st.session_state.msg_followups[ai_index]
+                if ai_index < len(st.session_state.msg_followups)
+                else None
+            )
+            if ai_index > 0 and followups:
+                st.caption("Suggested follow-ups:")
+                cols = st.columns(len(followups))
+                for i, suggestion in enumerate(followups):
+                    with cols[i]:
+                        if st.button(suggestion, key=f"followup_{ai_index}_{i}"):
+                            st.session_state["queued_question"] = suggestion
+                            st.rerun()
             if sources:
                 with st.expander("Sources"):
                     for src in sources:
@@ -723,15 +742,21 @@ for msg in msgs.messages:
 # Handle user input
 # ---------------------------------------------------------------------------
 
-if question := st.chat_input(
-    "Ask me anything about Cannondale Synapse bikes:", key="query_input"
-):
+if st.session_state.get("queued_question"):
+    question = st.session_state.pop("queued_question")
+else:
+    question = st.chat_input(
+        "Ask me anything about Cannondale Synapse bikes:", key="query_input"
+    )
+
+if question:
     st.chat_message("human").write(question)
+    # Build context from prior turns only; current question is passed separately.
+    chat_history = _build_chat_history(msgs.messages)
     msgs.add_user_message(question)
 
     reasoning_steps = []
     confidence = None
-    chat_history = _build_chat_history(msgs.messages)
 
     if st.session_state.critical_thinking:
         n_subq = st.session_state.num_subquestions
@@ -780,6 +805,15 @@ if question := st.chat_input(
     st.session_state.msg_confidence.append(confidence)
     # Store all passes except the final synthesis (which is the answer itself)
     st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
+
+    # Generate follow-up suggestions (skip on error answers)
+    if clean_answer.startswith("Error") or clean_answer.startswith("I'm sorry, an error"):
+        st.session_state.msg_followups.append(None)
+    else:
+        followups = generate_followup_suggestions(
+            question, clean_answer, model=st.session_state.selected_model
+        )
+        st.session_state.msg_followups.append(followups if followups else None)
 
     # Force a rerun so the sidebar Export Chat buttons reflect the updated
     # session state (sidebar renders before messages are added in the same run)
