@@ -150,6 +150,15 @@ section[data-testid="stSidebar"] {
     background-color: #1e1e2e !important;
     border: 1px solid #444 !important;
 }
+.stApp [data-testid="stExpander"] details,
+.stApp [data-testid="stExpander"] summary,
+.stApp [data-testid="stExpander"] details > div {
+    background-color: #1e1e2e !important;
+    color: #fafafa !important;
+}
+.stApp [data-testid="stExpander"] summary:hover {
+    background-color: #2a2d3a !important;
+}
 /* ---- Top header bar (dark) ---- */
 header[data-testid="stHeader"],
 header[data-testid="stHeader"] > div,
@@ -200,6 +209,56 @@ header[data-testid="stHeader"] span,
     background-color: #262730 !important;
     color: #fafafa !important;
     border-color: #555 !important;
+}
+/* ---- Buttons & chips (dark) ---- */
+.stApp .stButton > button,
+.stApp button[kind="primary"],
+.stApp button[kind="secondary"] {
+    background-color: #2c2f3a !important;
+    color: #e8edf5 !important;
+    border: 1px solid #4a5065 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+}
+.stApp .stButton > button:hover,
+.stApp button[kind="primary"]:hover,
+.stApp button[kind="secondary"]:hover {
+    background-color: #383c4e !important;
+    border-color: #6b7494 !important;
+    color: #ffffff !important;
+}
+.stApp .stButton > button:focus,
+.stApp button[kind="primary"]:focus,
+.stApp button[kind="secondary"]:focus {
+    outline: 2px solid #38bdf8 !important;
+    outline-offset: 2px !important;
+}
+.stApp .stButton > button:disabled,
+.stApp button[kind="primary"]:disabled,
+.stApp button[kind="secondary"]:disabled {
+    background-color: #1e2028 !important;
+    color: #5a5f72 !important;
+    border-color: #32364a !important;
+    cursor: not-allowed !important;
+}
+/* Download buttons (dark) */
+.stApp .stDownloadButton > button {
+    background-color: #2c2f3a !important;
+    color: #e8edf5 !important;
+    border: 1px solid #4a5065 !important;
+    border-radius: 6px !important;
+}
+.stApp .stDownloadButton > button:hover {
+    background-color: #383c4e !important;
+    border-color: #6b7494 !important;
+}
+/* Follow-up suggestion chips (dark) */
+.stApp [data-testid="stHorizontalBlock"] .stButton > button,
+.stApp [data-testid="stVerticalBlock"] .stChatMessage + div .stButton > button {
+    background-color: #232635 !important;
+    color: #c5cfe8 !important;
+    border: 1px solid #3e4560 !important;
+    font-size: 0.85rem !important;
 }
 </style>
 """
@@ -281,6 +340,24 @@ section[data-testid="stSidebar"] {
     background-color: #fafafa !important;
     border: 1px solid #e0e0e0 !important;
 }
+.stApp [data-testid="stExpander"] details {
+    background-color: #fafafa !important;
+    border-radius: 0.5rem !important;
+}
+.stApp [data-testid="stExpander"] summary {
+    background-color: #f8f9fb !important;
+    color: #31333f !important;
+}
+.stApp [data-testid="stExpander"] summary:hover {
+    background-color: #edf1f7 !important;
+}
+.stApp [data-testid="stExpander"] details[open] > summary {
+    border-bottom: 1px solid #e0e0e0 !important;
+}
+.stApp [data-testid="stExpander"] details > div {
+    background-color: #ffffff !important;
+    color: #31333f !important;
+}
 /* ---- Top header bar (light) ---- */
 header[data-testid="stHeader"],
 header[data-testid="stHeader"] > div,
@@ -331,6 +408,56 @@ header[data-testid="stHeader"] span,
     background-color: #ffffff !important;
     color: #31333f !important;
     border-color: #ccc !important;
+}
+/* ---- Buttons & chips (light) ---- */
+.stApp .stButton > button,
+.stApp button[kind="primary"],
+.stApp button[kind="secondary"] {
+    background-color: #e8edf5 !important;
+    color: #1e3a5f !important;
+    border: 1px solid #b0bec5 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+}
+.stApp .stButton > button:hover,
+.stApp button[kind="primary"]:hover,
+.stApp button[kind="secondary"]:hover {
+    background-color: #d0dbe8 !important;
+    border-color: #8fa4b8 !important;
+    color: #1a2d4a !important;
+}
+.stApp .stButton > button:focus,
+.stApp button[kind="primary"]:focus,
+.stApp button[kind="secondary"]:focus {
+    outline: 2px solid #0ea5e9 !important;
+    outline-offset: 2px !important;
+}
+.stApp .stButton > button:disabled,
+.stApp button[kind="primary"]:disabled,
+.stApp button[kind="secondary"]:disabled {
+    background-color: #f5f7fa !important;
+    color: #9aa4b2 !important;
+    border-color: #e1e6ed !important;
+    cursor: not-allowed !important;
+}
+/* Download buttons */
+.stApp .stDownloadButton > button {
+    background-color: #e8edf5 !important;
+    color: #1e3a5f !important;
+    border: 1px solid #b0bec5 !important;
+    border-radius: 6px !important;
+}
+.stApp .stDownloadButton > button:hover {
+    background-color: #d0dbe8 !important;
+    border-color: #8fa4b8 !important;
+}
+/* Follow-up suggestion chips */
+.stApp [data-testid="stHorizontalBlock"] .stButton > button,
+.stApp [data-testid="stVerticalBlock"] .stChatMessage + div .stButton > button {
+    background-color: #f4f7fc !important;
+    color: #1c3d5f !important;
+    border: 1px solid #c5d3e0 !important;
+    font-size: 0.85rem !important;
 }
 </style>
 """
