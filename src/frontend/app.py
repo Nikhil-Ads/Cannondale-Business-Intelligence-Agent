@@ -38,10 +38,10 @@ VECTORSTORE_DIR = str(BASE_DIR / "res" / "data" / "cannondale_vectorstore")
 os.environ["OPENAI_API_KEY"] = yaml.safe_load(open(CREDENTIALS_PATH))["openai"]
 
 # Import after env var is set so OpenAI clients pick it up
-from src.agents.bi_agent import make_mvp_rag_agent, run_critical_thinking_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
+from src.agents.bi_agent import make_mvp_rag_agent, run_critical_thinking_agent, run_comparison_agent, AVAILABLE_MODELS, DEFAULT_MODEL  # noqa: E402
 from src.utils.markdown_utils import sanitize_markdown  # noqa: E402
 from src.utils.followup_utils import generate_followup_suggestions  # noqa: E402
-import pandas as pd  # noqa: E402
+from src.utils.comparison_utils import detect_comparison_intent, extract_bike_names  # noqa: E402
 import plotly.express as px  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 
@@ -91,6 +91,7 @@ section[data-testid="stAppViewContainer"],
 /* ---- Main content text ---- */
 .stApp h1, .stApp h2, .stApp h3, .stApp p, .stApp label, .stApp span,
 .stApp .stMarkdown p, .stApp .stMarkdown li,
+.stApp .stMarkdown td, .stApp .stMarkdown th,
 .stApp [data-testid="stExpander"] label,
 .stApp [data-testid="stExpander"] p {
     color: #fafafa !important;
@@ -281,6 +282,7 @@ section[data-testid="stAppViewContainer"],
 /* ---- Main content text ---- */
 .stApp h1, .stApp h2, .stApp h3, .stApp p, .stApp label, .stApp span,
 .stApp .stMarkdown p, .stApp .stMarkdown li,
+.stApp .stMarkdown td, .stApp .stMarkdown th,
 .stApp [data-testid="stExpander"] label,
 .stApp [data-testid="stExpander"] p {
     color: #31333f !important;
@@ -580,24 +582,27 @@ _CHART_RE = re.compile(r'<chart_data>\s*(.*?)\s*</chart_data>', re.DOTALL)
 
 
 def _parse_chart_data(text: str):
-    """Extract <chart_data> block from text.
+    """Extract all <chart_data> blocks from text.
 
-    Returns (clean_text, chart_dict_or_None). The block is stripped from the
-    returned text so prose renders without stray JSON.
+    Returns (clean_text, charts_or_None) where charts_or_None is a list of
+    parsed chart dicts (one per block) or None when no blocks are found.
+    The blocks are stripped from the returned text so prose renders cleanly.
     """
-    match = _CHART_RE.search(text)
-    if not match:
+    matches = _CHART_RE.findall(text)
+    if not matches:
         return text, None
     clean_text = _CHART_RE.sub('', text).strip()
-    try:
-        chart = json.loads(match.group(1))
-        return clean_text, chart
-    except (json.JSONDecodeError, ValueError):
-        return clean_text, None
+    charts = []
+    for raw in matches:
+        try:
+            charts.append(json.loads(raw))
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return clean_text, charts if charts else None
 
 
 def _render_chart(chart_data: dict) -> None:
-    """Render a Plotly chart or dataframe from a chart_data dict."""
+    """Render a Plotly chart or markdown table from a chart_data dict."""
     chart_type = chart_data.get("type", "bar")
     title = chart_data.get("title", "")
     template = "plotly_dark" if st.session_state.dark_mode else "plotly"
@@ -606,10 +611,17 @@ def _render_chart(chart_data: dict) -> None:
         columns = chart_data.get("columns", [])
         rows = chart_data.get("rows", [])
         if columns and rows:
-            df = pd.DataFrame(rows, columns=columns)
             if title:
-                st.caption(f"**{title}**")
-            st.dataframe(df, width="stretch")
+                st.markdown(f"**{title}**")
+            # Build a markdown table so it inherits the app's theme CSS
+            # instead of st.dataframe which has independent styling.
+            header = "| " + " | ".join(str(c) for c in columns) + " |"
+            separator = "| " + " | ".join("---" for _ in columns) + " |"
+            body = "\n".join(
+                "| " + " | ".join(str(cell) for cell in row) + " |"
+                for row in rows
+            )
+            st.markdown(f"{header}\n{separator}\n{body}")
 
     elif chart_type in ("bar", "line"):
         x = chart_data.get("x", [])
@@ -634,6 +646,7 @@ def _clear_chat():
     st.session_state["msg_confidence"] = [None]
     st.session_state["msg_followups"] = [None]
     st.session_state["msg_feedback"] = {}
+    st.session_state["msg_comparisons"] = [False]
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +720,8 @@ if "msg_followups" not in st.session_state:
     st.session_state.msg_followups = [None]  # first entry = greeting (no follow-ups)
 if "msg_feedback" not in st.session_state:
     st.session_state.msg_feedback = {}  # {ai_index: "up" | "down"}
+if "msg_comparisons" not in st.session_state:
+    st.session_state.msg_comparisons = [False]  # first entry = greeting
 
 # Initialise feedback DB (creates table if needed)
 _init_feedback_db()
@@ -751,6 +766,7 @@ if st.sidebar.button("💬 New Chat", help="Start a new conversation (saves curr
     st.session_state.msg_confidence = [None]
     st.session_state.msg_followups = [None]
     st.session_state.msg_feedback = {}
+    st.session_state.msg_comparisons = [False]
     msgs.clear()
     st.rerun()
 
@@ -800,7 +816,14 @@ for msg in msgs.messages:
             if ai_index < len(st.session_state.msg_confidence)
             else None
         )
+        is_comparison = (
+            st.session_state.msg_comparisons[ai_index]
+            if ai_index < len(st.session_state.msg_comparisons)
+            else False
+        )
         with st.chat_message("ai"):
+            if is_comparison:
+                st.caption("↔ Side-by-side comparison")
             if reasoning:
                 with st.expander("🧠 Reasoning Steps", expanded=False):
                     for label, content in reasoning:
@@ -809,7 +832,8 @@ for msg in msgs.messages:
                         st.markdown("---")
             st.markdown(sanitize_markdown(msg.content))
             if chart_data:
-                _render_chart(chart_data)
+                for _chart in chart_data:
+                    _render_chart(_chart)
             if ai_index > 0 and confidence:
                 n_sources = len(sources) if sources else 0
                 st.caption(
@@ -884,8 +908,41 @@ if question:
 
     reasoning_steps = []
     confidence = None
+    is_comparison_response = False
 
-    if st.session_state.critical_thinking:
+    # Detect comparison intent before routing to any pipeline
+    is_comparison = detect_comparison_intent(question)
+
+    if is_comparison and not st.session_state.critical_thinking:
+        with st.spinner("Comparing bikes..."):
+            try:
+                bike_names = extract_bike_names(question, model=st.session_state.selected_model)
+                if len(bike_names) >= 2:
+                    result = run_comparison_agent(
+                        user_question=question,
+                        bike_names=bike_names,
+                        persist_dir=VECTORSTORE_DIR,
+                        model=st.session_state.selected_model,
+                        chat_history=chat_history,
+                    )
+                    answer = result["answer"]
+                    sources = result.get("sources", [])
+                    confidence = result.get("confidence")
+                    is_comparison_response = True
+                else:
+                    # Fallback to standard RAG if bike name extraction fails
+                    result = agent.invoke({"user_question": question, "chat_history": chat_history})
+                    answer = result["answer"]
+                    sources = result.get("sources", [])
+                    confidence = result.get("confidence")
+            except Exception as e:
+                logger.exception("Comparison agent failed")
+                answer = (
+                    "I'm sorry, an error occurred while comparing those bikes. "
+                    f"Please try again.\n\nError: {e}"
+                )
+                sources = []
+    elif st.session_state.critical_thinking:
         n_subq = st.session_state.num_subquestions
         spinner_msg = f"🧠 Thinking critically ({n_subq} sub-questions, {n_subq + 3} stages)..."
         with st.spinner(spinner_msg):
@@ -896,11 +953,13 @@ if question:
                     model=st.session_state.selected_model,
                     num_subquestions=n_subq,
                     chat_history=chat_history,
+                    is_comparison=is_comparison,
                 )
                 answer = result["answer"]
                 sources = result.get("sources", [])
                 reasoning_steps = result.get("reasoning", [])
                 confidence = result.get("confidence")
+                is_comparison_response = result.get("is_comparison", False)
             except Exception as e:
                 logger.exception("Critical thinking agent failed")
                 answer = (
@@ -923,13 +982,14 @@ if question:
                 )
                 sources = []
 
-    # Parse optional chart block; store clean prose in history, chart separately
+    # Parse chart blocks (returns list of dicts or None); store clean prose in history
     clean_answer, chart_data = _parse_chart_data(answer)
     msgs.add_ai_message(clean_answer)
     save_history(st.session_state.session_id, msgs.messages)
     st.session_state.msg_sources.append(sources)
     st.session_state.msg_charts.append(chart_data)
     st.session_state.msg_confidence.append(confidence)
+    st.session_state.msg_comparisons.append(is_comparison_response)
     # Store all passes except the final synthesis (which is the answer itself)
     st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
 

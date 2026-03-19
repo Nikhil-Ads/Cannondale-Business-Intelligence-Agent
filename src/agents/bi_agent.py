@@ -157,6 +157,51 @@ SYNTHESIZE_PROMPT = ChatPromptTemplate.from_messages([
 
 
 # ---------------------------------------------------------------------------
+# Comparison prompt
+# ---------------------------------------------------------------------------
+
+COMPARISON_SYSTEM_PROMPT = """\
+You are an expert assistant specialising in Cannondale Synapse bicycles.
+You are performing a dedicated side-by-side comparison of the bikes listed below.
+
+The context for each bike is provided in a labeled section. Use ONLY this context
+to answer — do not invent specifications.
+
+{context}
+
+Instructions:
+1. Write a concise prose section summarising the key differences between the bikes.
+   Do NOT include a markdown table in the prose — the structured table will be
+   rendered separately from the chart blocks below.
+2. After the prose, you MUST append exactly TWO <chart_data> blocks:
+   - First block: type "table" — a spec comparison table with rows for Price,
+     Weight, Frame Material, Groupset, Brakes, and any other specs present in
+     the context. Use the actual bike names as column headers.
+   - Second block: type "bar" — price comparison chart. Omit any bike whose
+     price is not available in the context.
+3. If a bike's context section says "No data found", clearly state in the prose
+   that the bike is not in the catalog and exclude it from both chart blocks.
+4. Do NOT invent any specification values not present in the context.
+
+Use exactly this format (valid JSON only, no markdown fences inside the tags):
+
+<chart_data>
+{{"type": "table", "title": "Spec Comparison", "columns": ["Spec", "Bike A", "Bike B"], "rows": [["Price", "$X", "$Y"], ["Weight", "X kg", "Y kg"], ["Frame Material", "...", "..."]]}}
+</chart_data>
+
+<chart_data>
+{{"type": "bar", "title": "Price Comparison", "x": ["Bike A", "Bike B"], "y": [1299, 1999], "labels": {{"x": "Model", "y": "Price (USD)"}}}}
+</chart_data>
+"""
+
+COMPARISON_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", COMPARISON_SYSTEM_PROMPT),
+    MessagesPlaceholder(variable_name="chat_history", optional=True),
+    ("human", "{user_question}"),
+])
+
+
+# ---------------------------------------------------------------------------
 # Graph state
 # ---------------------------------------------------------------------------
 
@@ -266,6 +311,7 @@ def run_critical_thinking_agent(
     model: str = DEFAULT_MODEL,
     num_subquestions: int = 3,
     chat_history: list | None = None,
+    is_comparison: bool = False,
 ) -> dict:
     """
     Multi-pass critical thinking agent.
@@ -274,7 +320,7 @@ def run_critical_thinking_agent(
       1. Decompose question into sub-questions
       2..N. RAG retrieval + answer each sub-question
       N+1. Critique — find gaps / contradictions
-      N+2. Synthesize into final answer
+      N+2. Synthesize into final answer (uses comparison prompt when is_comparison=True)
 
     Parameters
     ----------
@@ -287,14 +333,22 @@ def run_critical_thinking_agent(
     num_subquestions : int
         Number of sub-questions to decompose the query into (min 1, max 5).
         Total stages = num_subquestions + 3 (decompose, critique, synthesize).
+    chat_history : list | None
+        Prior conversation messages for context.
+    is_comparison : bool
+        When True, uses per-bike retrieval for sub-questions and the
+        comparison synthesis prompt for the final answer.
 
     Returns
     -------
     dict with keys:
-        answer     : str   — final synthesized answer
-        sources    : list  — deduplicated source URLs
-        reasoning  : list  — list of (label, text) tuples for display
+        answer        : str   — final synthesized answer
+        sources       : list  — deduplicated source URLs
+        reasoning     : list  — list of (label, text) tuples for display
+        is_comparison : bool  — mirrors the input flag for the frontend
     """
+    from src.utils.comparison_utils import extract_bike_names as _extract_bike_names
+
     n_subquestions = max(1, min(5, num_subquestions))
 
     vectorstore = get_chroma_vectorstore(persist_dir=persist_dir)
@@ -303,6 +357,14 @@ def run_critical_thinking_agent(
     reasoning: List[Tuple[str, str]] = []
     all_sources: List[str] = []
     first_scores: List[float] = []
+
+    # When comparison mode is active, pre-extract bike names so sub-question
+    # retrieval can use per-bike queries.
+    bike_names: list[str] = []
+    if is_comparison:
+        bike_names = _extract_bike_names(user_question, model=model)
+        if len(bike_names) < 2:
+            is_comparison = False  # fall back to standard flow if extraction failed
 
     # ------------------------------------------------------------------
     # Pass 1 — Decompose
@@ -332,23 +394,42 @@ def run_critical_thinking_agent(
     sub_answers_parts = []
     subq_chain = SUBQUESTION_PROMPT | llm
 
+    # Accumulated per-bike context for comparison synthesis
+    bike_contexts: dict[str, list[str]] = {name: [] for name in bike_names}
+    seen_sources: set[str] = set()
+
     for i, sub_q in enumerate(sub_questions, start=1):
         print(f"--- CRITICAL THINKING: SUB-QUESTION {i} ---")
-        docs_and_scores = get_docs_with_scores(vectorstore, sub_q, k=5)
-        docs = [doc for doc, _ in docs_and_scores]
-        scores = [score for _, score in docs_and_scores]
+
+        if is_comparison:
+            # Retrieve docs for each bike separately; merge for the sub-question answer.
+            # Prefix with "Cannondale Synapse" so the short name embeds closer to docs.
+            all_docs = []
+            all_scores_sq = []
+            for name in bike_names:
+                bike_docs_scores = get_docs_with_scores(
+                    vectorstore, f"Cannondale Synapse {name} {sub_q}", k=3
+                )
+                for doc, score in bike_docs_scores:
+                    all_docs.append(doc)
+                    all_scores_sq.append(score)
+                    bike_contexts[name].append(doc.page_content)
+            docs = all_docs
+            scores = all_scores_sq
+        else:
+            docs_and_scores = get_docs_with_scores(vectorstore, sub_q, k=5)
+            docs = [doc for doc, _ in docs_and_scores]
+            scores = [score for _, score in docs_and_scores]
 
         if i == 1:
             first_scores = scores
 
         # Collect sources
-        seen = set()
         for doc in docs:
             src = doc.metadata.get("source") or doc.metadata.get("url") or doc.metadata.get("Source")
-            if src and src not in seen and src != "generated_toc":
-                seen.add(src)
-                if src not in all_sources:
-                    all_sources.append(src)
+            if src and src not in seen_sources and src != "generated_toc":
+                seen_sources.add(src)
+                all_sources.append(src)
 
         context = "\n\n".join(doc.page_content for doc in docs)
         sub_response = subq_chain.invoke({"context": context, "sub_question": sub_q})
@@ -375,14 +456,41 @@ def run_critical_thinking_agent(
     # Pass N — Synthesize
     # ------------------------------------------------------------------
     print("--- CRITICAL THINKING: SYNTHESIZE ---")
-    synthesize_chain = SYNTHESIZE_PROMPT | llm
-    synthesize_response = synthesize_chain.invoke({
-        "user_question": user_question,
-        "sub_answers": sub_answers_text,
-        "critique": critique_text,
-    })
-    final_answer = synthesize_response.content.strip()
     synth_pass_num = critique_pass_num + 1
+
+    if is_comparison:
+        # Build labeled per-bike context for the comparison synthesis step
+        context_sections = []
+        for name in bike_names:
+            texts = bike_contexts.get(name, [])
+            if texts:
+                context_sections.append(f"--- Bike: {name} ---\n" + "\n\n".join(texts))
+            else:
+                context_sections.append(
+                    f"--- Bike: {name} ---\nNo data found for this model in the catalog."
+                )
+        combined_context = "\n\n".join(context_sections)
+
+        # Inject sub-question analysis into comparison prompt via the human turn
+        comparison_synthesis_chain = COMPARISON_PROMPT | llm
+        synthesize_response = comparison_synthesis_chain.invoke({
+            "context": combined_context,
+            "user_question": (
+                f"{user_question}\n\n"
+                f"[Critical Thinking sub-question analysis:]\n{sub_answers_text}\n\n"
+                f"[Critique / gaps:]\n{critique_text}"
+            ),
+            "chat_history": chat_history or [],
+        })
+    else:
+        synthesize_chain = SYNTHESIZE_PROMPT | llm
+        synthesize_response = synthesize_chain.invoke({
+            "user_question": user_question,
+            "sub_answers": sub_answers_text,
+            "critique": critique_text,
+        })
+
+    final_answer = synthesize_response.content.strip()
     reasoning.append((f"✅ Pass {synth_pass_num} — Synthesize", final_answer))
 
     return {
@@ -390,4 +498,101 @@ def run_critical_thinking_agent(
         "sources": all_sources,
         "reasoning": reasoning,
         "confidence": compute_confidence(first_scores),
+        "is_comparison": is_comparison,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Comparison Agent
+# ---------------------------------------------------------------------------
+
+# Bikes with a top similarity score below this level are considered absent from
+# the catalog. Set very low because per-bike name queries are short and naturally
+# produce lower cosine similarity scores than full-sentence queries.
+_NOT_FOUND_THRESHOLD = 0.05
+
+
+def run_comparison_agent(
+    user_question: str,
+    bike_names: list[str],
+    persist_dir: str = DEFAULT_PERSIST_DIR,
+    model: str = DEFAULT_MODEL,
+    chat_history: list | None = None,
+) -> dict:
+    """Dedicated side-by-side comparison agent.
+
+    Retrieves docs separately for each bike, builds labeled context sections,
+    then generates a structured comparison with a mandatory markdown table and
+    two <chart_data> blocks (table + bar chart).
+
+    Parameters
+    ----------
+    user_question : str
+        The original user question.
+    bike_names : list[str]
+        Names of the bikes to compare (extracted by comparison_utils).
+    persist_dir : str
+        Path to the persisted Chroma vector store.
+    model : str
+        OpenAI model to use.
+    chat_history : list | None
+        Prior conversation messages for context injection.
+
+    Returns
+    -------
+    dict with keys:
+        answer      : str   — final comparison answer (prose + table + chart blocks)
+        sources     : list  — deduplicated source URLs
+        confidence  : dict  — confidence from the highest-scoring bike retrieval
+        is_comparison : bool — always True, used by the frontend for the indicator
+    """
+    vectorstore = get_chroma_vectorstore(persist_dir=persist_dir)
+    llm = ChatOpenAI(model=model, temperature=0.3)
+
+    context_sections: list[str] = []
+    all_sources: list[str] = []
+    all_scores: list[float] = []
+    seen_sources: set[str] = set()
+
+    for name in bike_names:
+        # Enrich the query beyond just the model name so embeddings match better
+        # against the full document content stored in the vectorstore.
+        enriched_query = f"Cannondale Synapse {name} specifications price weight groupset"
+        docs_and_scores = get_docs_with_scores(vectorstore, enriched_query, k=4)
+        docs = [doc for doc, _ in docs_and_scores]
+        scores = [score for _, score in docs_and_scores]
+        top_score = max(scores) if scores else 0.0
+        all_scores.extend(scores)
+
+        if top_score < _NOT_FOUND_THRESHOLD:
+            context_sections.append(
+                f"--- Bike: {name} ---\nNo data found for this model in the catalog.\n"
+            )
+        else:
+            bike_context = "\n\n".join(doc.page_content for doc in docs)
+            context_sections.append(f"--- Bike: {name} ---\n{bike_context}\n")
+
+            for doc in docs:
+                src = (
+                    doc.metadata.get("source")
+                    or doc.metadata.get("url")
+                    or doc.metadata.get("Source")
+                )
+                if src and src not in seen_sources and src != "generated_toc":
+                    seen_sources.add(src)
+                    all_sources.append(src)
+
+    combined_context = "\n".join(context_sections)
+    comparison_chain = COMPARISON_PROMPT | llm
+    response = comparison_chain.invoke({
+        "context": combined_context,
+        "user_question": user_question,
+        "chat_history": chat_history or [],
+    })
+
+    return {
+        "answer": response.content,
+        "sources": all_sources,
+        "confidence": compute_confidence(all_scores),
+        "is_comparison": True,
     }
