@@ -929,8 +929,10 @@ if question:
     # Detect comparison intent before routing to any pipeline
     is_comparison = detect_comparison_intent(question)
 
-    if is_comparison and not st.session_state.critical_thinking:
-        with st.spinner("Comparing bikes..."):
+    with st.status("Generating answer...", expanded=False) as status:
+        # --- Stage 1: Agent invocation ---
+        if is_comparison and not st.session_state.critical_thinking:
+            status.update(label="Comparing bikes...")
             try:
                 bike_names = extract_bike_names(question, model=st.session_state.selected_model)
                 if len(bike_names) >= 2:
@@ -958,10 +960,9 @@ if question:
                     f"Please try again.\n\nError: {e}"
                 )
                 sources = []
-    elif st.session_state.critical_thinking:
-        n_subq = st.session_state.num_subquestions
-        spinner_msg = f"🧠 Thinking critically ({n_subq} sub-questions, {n_subq + 3} stages)..."
-        with st.spinner(spinner_msg):
+        elif st.session_state.critical_thinking:
+            n_subq = st.session_state.num_subquestions
+            status.update(label=f"🧠 Thinking critically ({n_subq} sub-questions, {n_subq + 3} stages)...")
             try:
                 result = run_critical_thinking_agent(
                     user_question=question,
@@ -983,8 +984,8 @@ if question:
                     f"Please try again.\n\nError: {e}"
                 )
                 sources = []
-    else:
-        with st.spinner("Thinking..."):
+        else:
+            status.update(label="Thinking...")
             try:
                 result = agent.invoke({"user_question": question, "chat_history": chat_history})
                 answer = result["answer"]
@@ -998,25 +999,30 @@ if question:
                 )
                 sources = []
 
-    # Parse chart blocks (returns list of dicts or None); store clean prose in history
-    clean_answer, chart_data = _parse_chart_data(answer)
-    msgs.add_ai_message(clean_answer)
-    save_history(st.session_state.session_id, msgs.messages)
-    st.session_state.msg_sources.append(sources)
-    st.session_state.msg_charts.append(chart_data)
-    st.session_state.msg_confidence.append(confidence)
-    st.session_state.msg_comparisons.append(is_comparison_response)
-    # Store all passes except the final synthesis (which is the answer itself)
-    st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
+        # --- Stage 2: Post-processing ---
+        status.update(label="Processing response...")
+        # Parse chart blocks (returns list of dicts or None); store clean prose in history
+        clean_answer, chart_data = _parse_chart_data(answer)
+        msgs.add_ai_message(clean_answer)
+        save_history(st.session_state.session_id, msgs.messages)
+        st.session_state.msg_sources.append(sources)
+        st.session_state.msg_charts.append(chart_data)
+        st.session_state.msg_confidence.append(confidence)
+        st.session_state.msg_comparisons.append(is_comparison_response)
+        # Store all passes except the final synthesis (which is the answer itself)
+        st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
 
-    # Generate follow-up suggestions (skip on error answers)
-    if clean_answer.startswith("Error") or clean_answer.startswith("I'm sorry, an error"):
-        st.session_state.msg_followups.append(None)
-    else:
-        followups = generate_followup_suggestions(
-            question, clean_answer, model=st.session_state.selected_model
-        )
-        st.session_state.msg_followups.append(followups if followups else None)
+        # --- Stage 3: Follow-up generation ---
+        if clean_answer.startswith("Error") or clean_answer.startswith("I'm sorry, an error"):
+            st.session_state.msg_followups.append(None)
+        else:
+            status.update(label="Generating follow-up suggestions...")
+            followups = generate_followup_suggestions(
+                question, clean_answer, model=st.session_state.selected_model
+            )
+            st.session_state.msg_followups.append(followups if followups else None)
+
+        status.update(label="Done!", state="complete", expanded=False)
 
     st.session_state.is_processing = False
     # Force a rerun so the sidebar Export Chat buttons reflect the updated
