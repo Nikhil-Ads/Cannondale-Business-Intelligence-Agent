@@ -57,6 +57,8 @@ st.set_page_config(page_title="BI Agent MVP - Cannondale Expert", layout="wide")
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
+if "is_processing" not in st.session_state:
+    st.session_state.is_processing = False
 
 # Persist session_id in the URL query params so it survives page refreshes.
 # On first load: generate a new ID and write it to the URL.
@@ -468,13 +470,19 @@ if st.session_state.dark_mode:
 else:
     st.markdown(_LIGHT_CSS, unsafe_allow_html=True)
 
+with st.sidebar.container():
+    st.markdown("**Theme**")
+    st.toggle(
+        "Dark Mode",
+        value=st.session_state.dark_mode,
+        key="dark_mode",
+        disabled=st.session_state.is_processing,
+        help="Disabled while a response is being generated." if st.session_state.is_processing else None,
+    )
+
 # ---------------------------------------------------------------------------
 # Sidebar — model selection (persisted in session_state)
 # ---------------------------------------------------------------------------
-
-with st.sidebar.container():
-    st.markdown("**Theme**")
-    st.toggle("Dark Mode", value=st.session_state.dark_mode, key="dark_mode")
 
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = DEFAULT_MODEL
@@ -852,6 +860,7 @@ for msg in msgs.messages:
                     with cols[i]:
                         if st.button(suggestion, key=f"followup_{ai_index}_{i}"):
                             st.session_state["queued_question"] = suggestion
+                            st.session_state.is_processing = True
                             st.rerun()
             if sources:
                 with st.expander("Sources"):
@@ -896,9 +905,16 @@ for msg in msgs.messages:
 if st.session_state.get("queued_question"):
     question = st.session_state.pop("queued_question")
 else:
-    question = st.chat_input(
+    _raw_input = st.chat_input(
         "Ask me anything about Cannondale Synapse bikes:", key="query_input"
     )
+    if _raw_input:
+        # Queue the question and mark as processing so the theme toggle is
+        # disabled on the next run (before the agent actually executes).
+        st.session_state.queued_question = _raw_input
+        st.session_state.is_processing = True
+        st.rerun()
+    question = None
 
 if question:
     st.chat_message("human").write(question)
@@ -1002,6 +1018,7 @@ if question:
         )
         st.session_state.msg_followups.append(followups if followups else None)
 
+    st.session_state.is_processing = False
     # Force a rerun so the sidebar Export Chat buttons reflect the updated
     # session state (sidebar renders before messages are added in the same run)
     st.rerun()
