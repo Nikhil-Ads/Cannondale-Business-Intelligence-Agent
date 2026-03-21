@@ -592,21 +592,28 @@ _CHART_RE = re.compile(r'<chart_data>\s*(.*?)\s*</chart_data>', re.DOTALL)
 def _parse_chart_data(text: str):
     """Extract all <chart_data> blocks from text.
 
-    Returns (clean_text, charts_or_None) where charts_or_None is a list of
-    parsed chart dicts (one per block) or None when no blocks are found.
+    Returns (clean_text, charts_or_None, malformed_or_None) where:
+    - charts_or_None is a list of parsed chart dicts, or None if none parsed successfully.
+    - malformed_or_None is a list of raw strings that failed JSON parsing, or None if all parsed.
     The blocks are stripped from the returned text so prose renders cleanly.
     """
     matches = _CHART_RE.findall(text)
     if not matches:
-        return text, None
+        return text, None, None
     clean_text = _CHART_RE.sub('', text).strip()
     charts = []
+    malformed = []
     for raw in matches:
         try:
             charts.append(json.loads(raw))
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return clean_text, charts if charts else None
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("Malformed chart JSON block: %s\n---\n%s", exc, raw)
+            malformed.append(raw)
+    return (
+        clean_text,
+        charts if charts else None,
+        malformed if malformed else None,
+    )
 
 
 def _render_chart(chart_data: dict) -> None:
@@ -656,6 +663,7 @@ def _clear_chat():
     st.session_state["msg_feedback"] = {}
     st.session_state["msg_comparisons"] = [False]
     st.session_state["msg_errors"] = [None]
+    st.session_state["msg_chart_errors"] = [None]
 
 
 # ---------------------------------------------------------------------------
@@ -733,6 +741,8 @@ if "msg_comparisons" not in st.session_state:
     st.session_state.msg_comparisons = [False]  # first entry = greeting
 if "msg_errors" not in st.session_state:
     st.session_state.msg_errors = [None]  # first entry = greeting (no error)
+if "msg_chart_errors" not in st.session_state:
+    st.session_state.msg_chart_errors = [None]  # first entry = greeting (no chart errors)
 
 # Initialise feedback DB (creates table if needed)
 _init_feedback_db()
@@ -779,6 +789,7 @@ if st.sidebar.button("💬 New Chat", help="Start a new conversation (saves curr
     st.session_state.msg_feedback = {}
     st.session_state.msg_comparisons = [False]
     st.session_state.msg_errors = [None]
+    st.session_state.msg_chart_errors = [None]
     msgs.clear()
     st.rerun()
 
@@ -851,6 +862,16 @@ for msg in msgs.messages:
             if chart_data:
                 for _chart in chart_data:
                     _render_chart(_chart)
+            chart_errors = (
+                st.session_state.msg_chart_errors[ai_index]
+                if ai_index < len(st.session_state.msg_chart_errors)
+                else None
+            )
+            if chart_errors:
+                st.warning("A chart could not be rendered for this response.")
+                with st.expander("Malformed chart data (for inspection)"):
+                    for raw in chart_errors:
+                        st.code(raw, language="json")
             if ai_index > 0 and confidence:
                 n_sources = len(sources) if sources else 0
                 st.caption(
@@ -1018,11 +1039,12 @@ if question:
         # --- Stage 2: Post-processing ---
         status.update(label="Processing response...")
         # Parse chart blocks (returns list of dicts or None); store clean prose in history
-        clean_answer, chart_data = _parse_chart_data(answer)
+        clean_answer, chart_data, chart_errors = _parse_chart_data(answer)
         msgs.add_ai_message(clean_answer)
         save_history(st.session_state.session_id, msgs.messages)
         st.session_state.msg_sources.append(sources)
         st.session_state.msg_charts.append(chart_data)
+        st.session_state.msg_chart_errors.append(chart_errors)
         st.session_state.msg_confidence.append(confidence)
         st.session_state.msg_comparisons.append(is_comparison_response)
         st.session_state.msg_errors.append(str(_last_error) if _last_error is not None else None)
