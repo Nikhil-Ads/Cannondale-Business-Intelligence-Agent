@@ -655,6 +655,7 @@ def _clear_chat():
     st.session_state["msg_followups"] = [None]
     st.session_state["msg_feedback"] = {}
     st.session_state["msg_comparisons"] = [False]
+    st.session_state["msg_errors"] = [None]
 
 
 # ---------------------------------------------------------------------------
@@ -730,6 +731,8 @@ if "msg_feedback" not in st.session_state:
     st.session_state.msg_feedback = {}  # {ai_index: "up" | "down"}
 if "msg_comparisons" not in st.session_state:
     st.session_state.msg_comparisons = [False]  # first entry = greeting
+if "msg_errors" not in st.session_state:
+    st.session_state.msg_errors = [None]  # first entry = greeting (no error)
 
 # Initialise feedback DB (creates table if needed)
 _init_feedback_db()
@@ -775,6 +778,7 @@ if st.sidebar.button("💬 New Chat", help="Start a new conversation (saves curr
     st.session_state.msg_followups = [None]
     st.session_state.msg_feedback = {}
     st.session_state.msg_comparisons = [False]
+    st.session_state.msg_errors = [None]
     msgs.clear()
     st.rerun()
 
@@ -829,6 +833,11 @@ for msg in msgs.messages:
             if ai_index < len(st.session_state.msg_comparisons)
             else False
         )
+        error_detail = (
+            st.session_state.msg_errors[ai_index]
+            if ai_index < len(st.session_state.msg_errors)
+            else None
+        )
         with st.chat_message("ai"):
             if is_comparison:
                 st.caption("↔ Side-by-side comparison")
@@ -866,6 +875,9 @@ for msg in msgs.messages:
                 with st.expander("Sources"):
                     for src in sources:
                         st.markdown(f"- [{src}]({src})")
+            if error_detail:
+                with st.expander("Technical details"):
+                    st.code(error_detail, language="text")
             # Feedback buttons — skip for the greeting message (index 0)
             if ai_index > 0:
                 fb = st.session_state.msg_feedback.get(ai_index)
@@ -925,6 +937,7 @@ if question:
     reasoning_steps = []
     confidence = None
     is_comparison_response = False
+    _last_error: Exception | None = None
 
     # Detect comparison intent before routing to any pipeline
     is_comparison = detect_comparison_intent(question)
@@ -955,9 +968,10 @@ if question:
                     confidence = result.get("confidence")
             except Exception as e:
                 logger.exception("Comparison agent failed")
+                _last_error = e
                 answer = (
                     "I'm sorry, an error occurred while comparing those bikes. "
-                    f"Please try again.\n\nError: {e}"
+                    "Please try again or rephrase your question."
                 )
                 sources = []
         elif st.session_state.critical_thinking:
@@ -979,9 +993,10 @@ if question:
                 is_comparison_response = result.get("is_comparison", False)
             except Exception as e:
                 logger.exception("Critical thinking agent failed")
+                _last_error = e
                 answer = (
                     "I'm sorry, an error occurred during critical thinking. "
-                    f"Please try again.\n\nError: {e}"
+                    "Please try again or rephrase your question."
                 )
                 sources = []
         else:
@@ -993,9 +1008,10 @@ if question:
                 confidence = result.get("confidence")
             except Exception as e:
                 logger.exception("Standard inference failed")
+                _last_error = e
                 answer = (
                     "I'm sorry, an error occurred while processing your question. "
-                    f"Please try again.\n\nError: {e}"
+                    "Please try again or rephrase your question."
                 )
                 sources = []
 
@@ -1009,6 +1025,7 @@ if question:
         st.session_state.msg_charts.append(chart_data)
         st.session_state.msg_confidence.append(confidence)
         st.session_state.msg_comparisons.append(is_comparison_response)
+        st.session_state.msg_errors.append(str(_last_error) if _last_error is not None else None)
         # Store all passes except the final synthesis (which is the answer itself)
         st.session_state.msg_reasoning.append(reasoning_steps[:-1] if reasoning_steps else [])
 
