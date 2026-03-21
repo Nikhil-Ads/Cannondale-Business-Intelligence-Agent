@@ -42,6 +42,7 @@ from src.agents.bi_agent import make_mvp_rag_agent, run_critical_thinking_agent,
 from src.utils.markdown_utils import sanitize_markdown  # noqa: E402
 from src.utils.followup_utils import generate_followup_suggestions  # noqa: E402
 from src.utils.comparison_utils import detect_comparison_intent, extract_bike_names  # noqa: E402
+import pandas as pd  # noqa: E402
 import plotly.express as px  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 
@@ -852,53 +853,100 @@ for msg in msgs.messages:
         with st.chat_message("ai"):
             if is_comparison:
                 st.caption("↔ Side-by-side comparison")
-            if reasoning:
-                with st.expander("🧠 Reasoning Steps", expanded=False):
-                    for label, content in reasoning:
-                        st.markdown(f"**{label}**")
-                        st.markdown(content)
-                        st.markdown("---")
-            st.markdown(sanitize_markdown(msg.content))
-            if chart_data:
-                for _chart in chart_data:
-                    _render_chart(_chart)
+
             chart_errors = (
                 st.session_state.msg_chart_errors[ai_index]
                 if ai_index < len(st.session_state.msg_chart_errors)
                 else None
             )
-            if chart_errors:
-                st.warning("A chart could not be rendered for this response.")
-                with st.expander("Malformed chart data (for inspection)"):
-                    for raw in chart_errors:
-                        st.code(raw, language="json")
-            if ai_index > 0 and confidence:
-                n_sources = len(sources) if sources else 0
-                st.caption(
-                    f"{confidence['emoji']} {confidence['level']} confidence · {n_sources} sources"
+
+            # Partition chart_data into tables (Data tab) and plots (Visualizations tab)
+            tables = [c for c in chart_data if c.get("type") == "table"] if chart_data else []
+            visualizations = [c for c in chart_data if c.get("type") in ("bar", "line")] if chart_data else []
+
+            if ai_index == 0:
+                # Greeting message: plain markdown, no tabs needed
+                st.markdown(sanitize_markdown(msg.content))
+            else:
+                # Confidence indicator above tabs so it is always visible
+                if confidence:
+                    n_sources = len(sources) if sources else 0
+                    st.caption(
+                        f"{confidence['emoji']} {confidence['level']} confidence · {n_sources} sources"
+                    )
+
+                # Build dynamic tab list — only include tabs that have content
+                tab_spec = [("Answer", "answer")]
+                if tables:
+                    tab_spec.append(("Data", "data"))
+                if visualizations:
+                    tab_spec.append(("Visualizations", "viz"))
+                if reasoning:
+                    tab_spec.append(("Reasoning", "reasoning"))
+                if sources:
+                    tab_spec.append(("Sources", "sources"))
+
+                tab_objects = st.tabs([name for name, _ in tab_spec])
+
+                for tab_obj, (_, key) in zip(tab_objects, tab_spec):
+                    with tab_obj:
+                        if key == "answer":
+                            st.markdown(sanitize_markdown(msg.content))
+                            if error_detail:
+                                with st.expander("Technical details"):
+                                    st.code(error_detail, language="text")
+                            if chart_errors:
+                                st.warning("A chart could not be rendered for this response.")
+                                with st.expander("Malformed chart data (for inspection)"):
+                                    for raw in chart_errors:
+                                        st.code(raw, language="json")
+
+                        elif key == "data":
+                            for tbl in tables:
+                                title = tbl.get("title", "")
+                                columns = tbl.get("columns", [])
+                                rows = tbl.get("rows", [])
+                                if title:
+                                    st.markdown(f"**{title}**")
+                                if columns and rows:
+                                    df = pd.DataFrame(rows, columns=columns)
+                                    st.dataframe(df, use_container_width=True)
+
+                        elif key == "viz":
+                            for _chart in visualizations:
+                                _render_chart(_chart)
+                            if chart_errors:
+                                st.warning("A chart could not be rendered for this response.")
+                                with st.expander("Malformed chart data (for inspection)"):
+                                    for raw in chart_errors:
+                                        st.code(raw, language="json")
+
+                        elif key == "reasoning":
+                            for label, content in reasoning:
+                                st.markdown(f"**{label}**")
+                                st.markdown(content)
+                                st.markdown("---")
+
+                        elif key == "sources":
+                            for src in sources:
+                                st.markdown(f"- [{src}]({src})")
+
+                # Follow-up suggestions — outside tabs, always visible
+                followups = (
+                    st.session_state.msg_followups[ai_index]
+                    if ai_index < len(st.session_state.msg_followups)
+                    else None
                 )
-            # Follow-up suggestions
-            followups = (
-                st.session_state.msg_followups[ai_index]
-                if ai_index < len(st.session_state.msg_followups)
-                else None
-            )
-            if ai_index > 0 and followups:
-                st.caption("Suggested follow-ups:")
-                cols = st.columns(len(followups))
-                for i, suggestion in enumerate(followups):
-                    with cols[i]:
-                        if st.button(suggestion, key=f"followup_{ai_index}_{i}"):
-                            st.session_state["queued_question"] = suggestion
-                            st.session_state.is_processing = True
-                            st.rerun()
-            if sources:
-                with st.expander("Sources"):
-                    for src in sources:
-                        st.markdown(f"- [{src}]({src})")
-            if error_detail:
-                with st.expander("Technical details"):
-                    st.code(error_detail, language="text")
+                if followups:
+                    st.caption("Suggested follow-ups:")
+                    cols = st.columns(len(followups))
+                    for i, suggestion in enumerate(followups):
+                        with cols[i]:
+                            if st.button(suggestion, key=f"followup_{ai_index}_{i}"):
+                                st.session_state["queued_question"] = suggestion
+                                st.session_state.is_processing = True
+                                st.rerun()
+
             # Feedback buttons — skip for the greeting message (index 0)
             if ai_index > 0:
                 fb = st.session_state.msg_feedback.get(ai_index)
